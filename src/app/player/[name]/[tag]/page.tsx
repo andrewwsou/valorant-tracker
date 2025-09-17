@@ -168,11 +168,17 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 const fallback = m.segments?.[0]?.stats?.result ?? "-";
                 const result = resultForTeam(myTeam, rounds, fallback);
                 
+                const date_format = new Intl.DateTimeFormat('en-US', {
+                  timeZone: 'America/Los_Angeles',
+                  dateStyle: 'short',
+                  timeStyle: 'short',
+                });
+                const game_start = m.metadata?.game_start;
+
                 const started =
-                  m.metadata?.game_start_patched ??
-                  (typeof m.metadata?.game_start === "number"
-                    ? new Date(m.metadata.game_start * 1000).toLocaleString()
-                    : "-");
+                  typeof game_start === 'number'
+                    ? date_format.format(game_start * 1000)
+                    : 'Date Unavailable';
 
                 return (
                   <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
