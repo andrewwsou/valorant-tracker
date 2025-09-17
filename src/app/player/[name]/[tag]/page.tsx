@@ -7,51 +7,116 @@ type Metadata = {
 };
 type Teams = { red?: { rounds_won?: number }; blue?: { rounds_won?: number } };
 type Segment = { stats?: { result?: string } };
+
 type HenrikMatch = {
   metadata?: Metadata;
   teams?: Teams;
   rounds?: { red: number; blue: number };
   segments?: Segment[];
 };
+
 type ApiResponse<T> = { status?: number; data?: T; error?: string };
 
 type ParamsP = Promise<{ name: string; tag: string }>;
 
+type PlayerLite = {
+  puuid?: string;
+  name?: string;
+  tag?: string;
+  team?: "Red" | "Blue" | string;
+};
+
+type HenrikMatchFull = HenrikMatch & {
+  players?: {
+    all_players?: PlayerLite[];
+    red?: PlayerLite[];
+    blue?: PlayerLite[];
+  };
+  teams?: {
+    red?: { rounds_won?: number; rounds_lost?: number; has_won?: boolean };
+    blue?: { rounds_won?: number; rounds_lost?: number; has_won?: boolean };
+  };
+};
+
+function findPlayerTeam(
+  match: HenrikMatchFull,
+  who: { puuid?: string; name?: string; tag?: string }
+): "red" | "blue" | null {
+  const everyone = match?.players?.all_players ?? [];
+  const target = everyone.find((p) => {
+    if (who.puuid && p.puuid) return p.puuid === who.puuid;
+    const pn = (p.name ?? "").toLowerCase();
+    const pt = (p.tag ?? "").toLowerCase();
+    return pn === (who.name ?? "").toLowerCase() && pt === (who.tag ?? "").toLowerCase();
+  });
+
+  if (!target?.team) return null;
+  const t = target.team.toLowerCase();
+  return t === "red" || t === "blue" ? (t as "red" | "blue") : null;
+}
+
+function getRounds(match: HenrikMatchFull): { red: number | null; blue: number | null } {
+  const red =
+    typeof match?.rounds?.red === "number"
+      ? match.rounds.red
+      : match?.teams?.red?.rounds_won ?? null;
+  const blue =
+    typeof match?.rounds?.blue === "number"
+      ? match.rounds.blue
+      : match?.teams?.blue?.rounds_won ?? null;
+  return { red, blue };
+}
+
+function resultForTeam(
+  team: "red" | "blue" | null,
+  rounds: { red: number | null; blue: number | null },
+  fallback?: string
+): "W" | "L" | "D" | string {
+  const { red, blue } = rounds;
+  if (!team || red == null || blue == null) return fallback ?? "-";
+  if (red === blue) return "D";
+  const weWon = team === "red" ? red > blue : blue > red;
+  return weWon ? "W" : "L";
+}
+
+function readApiError(x: unknown): string | null {
+  if (!x || typeof x !== "object") return null;
+  const maybe = (x as { error?: unknown }).error;
+  if (typeof maybe === "string" && maybe.trim()) return maybe;
+  return null;
+}
+
+
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
   const name = decodeURIComponent(rawName);
-  const tag  = decodeURIComponent(rawTag);
+  const tag = decodeURIComponent(rawTag);
 
   const qs = new URLSearchParams({
-    region: 'na',
+    region: "na",
     name,
     tag,
-    size: '10',
-    mode: 'competitive',
+    size: "10",
+    mode: "competitive",
   });
 
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
-  const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: 'no-store' });
+  const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
 
-  console.log(`${base}/api/matches?${qs.toString()}`);
-  console.log(qs.toString());
-  
-  let matches: HenrikMatch[] = [];
-  let apiError = '';
+  let matches: HenrikMatchFull[] = [];
+  let apiError = "";
 
   if (res.ok) {
-    const json = (await res.json()) as ApiResponse<HenrikMatch[]>;
+    const json = (await res.json()) as ApiResponse<HenrikMatchFull[]>;
     matches = Array.isArray(json?.data) ? json.data : [];
   } else {
     try {
-      const errJson = (await res.json()) as ApiResponse<unknown>;
-      apiError =
-        typeof errJson?.error === 'string' && errJson.error.trim()
-          ? errJson.error
-          : `API error ${res.status}`;
+      const errJson = (await res.json()) as unknown;
+      const msg = readApiError(errJson);
+      apiError = msg ?? `API error ${res.status}`;
     } catch {
       apiError = `API error ${res.status}`;
     }
@@ -80,52 +145,43 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
         <h2 className="mb-2 text-lg font-medium">Recent Matches</h2>
         <div className="overflow-x-auto rounded border">
           <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-left text-gray-600">
+            <thead className="bg-[#2b3d50] text-left text-gray-300">
               <tr>
-                <th className="px-3 py-2">Map</th>
+                <th className="px-3 py-2"></th>
                 <th className="px-3 py-2">Mode</th>
                 <th className="px-3 py-2">Score</th>
                 <th className="px-3 py-2">Result</th>
-                <th className="px-3 py-2">Started</th>
+                <th className="px-3 py-2">Date</th>
               </tr>
             </thead>
             <tbody>
               {matches.map((m, i) => {
-                const map = m.metadata?.map ?? '-';
-                const mode = m.metadata?.mode ?? '-';
+                const map = m.metadata?.map ?? "-";
+                const mode = m.metadata?.mode ?? "-";
 
-                const rRed =
-                  typeof m.rounds?.red === 'number'
-                    ? m.rounds.red
-                    : m.teams?.red?.rounds_won ?? null;
-                const rBlue =
-                  typeof m.rounds?.blue === 'number'
-                    ? m.rounds.blue
-                    : m.teams?.blue?.rounds_won ?? null;
+                const rounds = getRounds(m);
+
+                const myTeam = findPlayerTeam(m, { name, tag });
+
                 const score =
-                  rRed != null && rBlue != null ? `${rRed}–${rBlue}` : '-';
-
-                const result =
-                  rRed != null && rBlue != null
-                    ? rRed > rBlue
-                      ? 'W'
-                      : rRed < rBlue
-                      ? 'L'
-                      : 'T'
-                    : m.segments?.[0]?.stats?.result ?? '-';
-
+                  myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
+                const fallback = m.segments?.[0]?.stats?.result ?? "-";
+                const result = resultForTeam(myTeam, rounds, fallback);
+                
                 const started =
                   m.metadata?.game_start_patched ??
-                  (typeof m.metadata?.game_start === 'number'
+                  (typeof m.metadata?.game_start === "number"
                     ? new Date(m.metadata.game_start * 1000).toLocaleString()
-                    : '-');
+                    : "-");
 
                 return (
                   <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
                     <td className="px-3 py-2">{map}</td>
                     <td className="px-3 py-2">{mode}</td>
                     <td className="px-3 py-2">{score}</td>
-                    <td className="px-3 py-2">{result}</td>
+                    <td className="px-3 py-2">
+                      {result}
+                    </td>
                     <td className="px-3 py-2">{started}</td>
                   </tr>
                 );
