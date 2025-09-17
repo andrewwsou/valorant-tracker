@@ -88,15 +88,17 @@ function readApiError(x: unknown): string | null {
 
 
 function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): 
-{ kills: number | null; deaths: number | null; assists: number |null } {
+{ kills: number | null; deaths: number | null; assists: number |null; acs: number |null; headshots: number |null } {
 
   const target = match_player(match, who )
-  if (!target) return { kills: null, deaths: null, assists: null };
+  if (!target) return { kills: null, deaths: null, assists: null, acs: null, headshots: null };
 
   const kills = target.stats?.kills ?? null;
   const deaths = target.stats?.deaths ?? null;
   const assists = target.stats?.assists ?? null;
-  return { kills, deaths, assists };
+  const acs = target.stats?.score ?? null;
+  const headshots = target.stats?.headshots ?? null;
+  return { kills, deaths, assists, acs, headshots};
 }
 
 
@@ -175,7 +177,8 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 <th className="px-3 py-2">Score</th>
                 <th className="px-3 py-2">Result</th>
                 <th className="px-3 py-2">Date</th>
-                <th className="px-3 py-2">Stats</th>
+                <th className="px-3 py-2">K/D/A</th>
+                <th className="px-3 py-2">ACS</th>
               </tr>
             </thead>
             <tbody>
@@ -188,6 +191,9 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 const stats = getPlayerStats(m, { name, tag });
 
                 const myTeam = findPlayerTeam(m, { name, tag });
+                
+                const totalRounds = (rounds.red!) + (rounds.blue!);
+                const acs =  Math.round(stats.acs! / totalRounds);
 
                 const score =
                   myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
@@ -211,6 +217,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                     </td>
                     <td className="px-3 py-2">{started}</td>
                     <td className="px-3 py-2">{`${stats.kills}/${stats.deaths}/${stats.assists}`}</td>
+                    <td className="px-3 py-2">{acs}</td>
                   </tr>
                 );
               })}
