@@ -20,10 +20,21 @@ type ApiResponse<T> = { status?: number; data?: T; error?: string };
 
 type ParamsP = Promise<{ name: string; tag: string }>;
 
+type PlayerStats = {
+  kills?: number;
+  deaths?: number;
+  assists?: number;
+  score?: number;
+  bodyshots?: number;
+  headshots?: number;
+  legshots?: number;
+};
+
 type PlayerLite = {
   puuid?: string;
   name?: string;
   tag?: string;
+  stats?: PlayerStats;
   team?: "Red" | "Blue" | string;
 };
 
@@ -46,18 +57,8 @@ const date_format = new Intl.DateTimeFormat('en-US', {
   timeStyle: 'short',
 });
 
-function findPlayerTeam(
-  match: HenrikMatchFull,
-  who: { puuid?: string; name?: string; tag?: string }
-): "red" | "blue" | null {
-  const everyone = match?.players?.all_players ?? [];
-  const target = everyone.find((p) => {
-    if (who.puuid && p.puuid) return p.puuid === who.puuid;
-    const pn = (p.name ?? "").toLowerCase();
-    const pt = (p.tag ?? "").toLowerCase();
-    return pn === (who.name ?? "").toLowerCase() && pt === (who.tag ?? "").toLowerCase();
-  });
-
+function findPlayerTeam(match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): "red" | "blue" | null {
+  const target = match_player(match, who )
   if (!target?.team) return null;
   const t = target.team.toLowerCase();
   return t === "red" || t === "blue" ? (t as "red" | "blue") : null;
@@ -69,11 +70,8 @@ function getRounds(match: HenrikMatchFull): { red: number | null; blue: number |
   return { red, blue };
 }
 
-function resultForTeam(
-  team: "red" | "blue" | null,
-  rounds: { red: number | null; blue: number | null },
-  fallback?: string
-): "W" | "L" | "D" | string {
+function resultForTeam(team: "red" | "blue" | null, rounds: { red: number | null; blue: number | null }, fallback?: string):
+ "W" | "L" | "D" | string {
   const { red, blue } = rounds;
   if (!team || red == null || blue == null) return fallback ?? "-";
   if (red === blue) return "D";
@@ -88,28 +86,29 @@ function readApiError(x: unknown): string | null {
   return null;
 }
 
-// function findPlayerTeam( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): "red" | "blue" | null {
-//   const everyone = match?.players?.all_players ?? [];
-//   const target = everyone.find((p) => {
-//     if (who.puuid && p.puuid) return p.puuid === who.puuid;
-//     const pn = (p.name ?? "").toLowerCase();
-//     const pt = (p.tag ?? "").toLowerCase();
-//     return pn === (who.name ?? "").toLowerCase() && pt === (who.tag ?? "").toLowerCase();
-//   });
 
-//   if (!target?.team) return null;
-//   const t = target.team.toLowerCase();
-//   return t === "red" || t === "blue" ? (t as "red" | "blue") : null;
-// }
+function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): 
+{ kills: number | null; deaths: number | null; assists: number |null } {
 
-// function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }):
-//   { kills: number | null; deaths: number | null; assists: number |null } {
-//   const kills =
-//   const red = match?.teams?.red?.rounds_won ?? null;
-//   const blue = match?.teams?.blue?.rounds_won ?? null;
-//   return { red, blue };
-// }
+  const target = match_player(match, who )
+  if (!target) return { kills: null, deaths: null, assists: null };
 
+  const kills = target.stats?.kills ?? null;
+  const deaths = target.stats?.deaths ?? null;
+  const assists = target.stats?.assists ?? null;
+  return { kills, deaths, assists };
+}
+
+
+function match_player( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): PlayerLite | undefined {
+  const everyone = match?.players?.all_players ?? [];
+  return everyone.find((p) => {
+    if (who.puuid && p.puuid) return p.puuid === who.puuid;
+    const pn = (p.name ?? "").toLowerCase();
+    const pt = (p.tag ?? "").toLowerCase();
+    return pn === (who.name ?? "").toLowerCase() && pt === (who.tag ?? "").toLowerCase();
+  });
+}
 
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
@@ -176,6 +175,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 <th className="px-3 py-2">Score</th>
                 <th className="px-3 py-2">Result</th>
                 <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Stats</th>
               </tr>
             </thead>
             <tbody>
@@ -185,7 +185,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
                 const rounds = getRounds(m);
 
-                // const player_stats = getPlayerStats(m, { name, tag });
+                const stats = getPlayerStats(m, { name, tag });
 
                 const myTeam = findPlayerTeam(m, { name, tag });
 
@@ -210,6 +210,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                       {result}
                     </td>
                     <td className="px-3 py-2">{started}</td>
+                    <td className="px-3 py-2">{`${stats.kills}/${stats.deaths}/${stats.assists}`}</td>
                   </tr>
                 );
               })}
