@@ -7,11 +7,12 @@ type Metadata = {
 };
 type Teams = { red?: { rounds_won?: number }; blue?: { rounds_won?: number } };
 type Segment = { stats?: { result?: string } };
+type Round = { winning_team?: 'Red' | 'Blue' | string};
 
 type HenrikMatch = {
   metadata?: Metadata;
   teams?: Teams;
-  rounds?: { red: number; blue: number };
+  rounds?: Round[];
   segments?: Segment[];
 };
 
@@ -38,6 +39,13 @@ type HenrikMatchFull = HenrikMatch & {
   };
 };
 
+                
+const date_format = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  dateStyle: 'short',
+  timeStyle: 'short',
+});
+
 function findPlayerTeam(
   match: HenrikMatchFull,
   who: { puuid?: string; name?: string; tag?: string }
@@ -56,14 +64,8 @@ function findPlayerTeam(
 }
 
 function getRounds(match: HenrikMatchFull): { red: number | null; blue: number | null } {
-  const red =
-    typeof match?.rounds?.red === "number"
-      ? match.rounds.red
-      : match?.teams?.red?.rounds_won ?? null;
-  const blue =
-    typeof match?.rounds?.blue === "number"
-      ? match.rounds.blue
-      : match?.teams?.blue?.rounds_won ?? null;
+  const red = match?.teams?.red?.rounds_won ?? null;
+  const blue = match?.teams?.blue?.rounds_won ?? null;
   return { red, blue };
 }
 
@@ -85,6 +87,28 @@ function readApiError(x: unknown): string | null {
   if (typeof maybe === "string" && maybe.trim()) return maybe;
   return null;
 }
+
+// function findPlayerTeam( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): "red" | "blue" | null {
+//   const everyone = match?.players?.all_players ?? [];
+//   const target = everyone.find((p) => {
+//     if (who.puuid && p.puuid) return p.puuid === who.puuid;
+//     const pn = (p.name ?? "").toLowerCase();
+//     const pt = (p.tag ?? "").toLowerCase();
+//     return pn === (who.name ?? "").toLowerCase() && pt === (who.tag ?? "").toLowerCase();
+//   });
+
+//   if (!target?.team) return null;
+//   const t = target.team.toLowerCase();
+//   return t === "red" || t === "blue" ? (t as "red" | "blue") : null;
+// }
+
+// function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }):
+//   { kills: number | null; deaths: number | null; assists: number |null } {
+//   const kills =
+//   const red = match?.teams?.red?.rounds_won ?? null;
+//   const blue = match?.teams?.blue?.rounds_won ?? null;
+//   return { red, blue };
+// }
 
 
 export default async function PlayerPage({ params }: { params: ParamsP }) {
@@ -161,18 +185,15 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
                 const rounds = getRounds(m);
 
+                // const player_stats = getPlayerStats(m, { name, tag });
+
                 const myTeam = findPlayerTeam(m, { name, tag });
 
                 const score =
                   myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
                 const fallback = m.segments?.[0]?.stats?.result ?? "-";
                 const result = resultForTeam(myTeam, rounds, fallback);
-                
-                const date_format = new Intl.DateTimeFormat('en-US', {
-                  timeZone: 'America/Los_Angeles',
-                  dateStyle: 'short',
-                  timeStyle: 'short',
-                });
+
                 const game_start = m.metadata?.game_start;
 
                 const started =
