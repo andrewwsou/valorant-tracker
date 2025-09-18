@@ -264,7 +264,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                   <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
                     <td className="px-3 py-2">{map}</td>
                     <td className="px-3 py-2">{mode}</td>
-                    <td className="px-3 py-2">{<Image src={rank_icon} alt={"Rank"} width={5} height={5}/>}</td>
+                    <td className="px-3 py-2">{<Image src={rank_icon} alt={"Rank"} width={30} height={30}/>}</td>
                     <td className="px-3 py-2">{score}</td>
                     <td className="px-3 py-2">
                       {result}
