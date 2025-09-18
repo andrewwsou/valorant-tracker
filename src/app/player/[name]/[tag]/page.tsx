@@ -35,6 +35,7 @@ type PlayerLite = {
   name?: string;
   tag?: string;
   stats?: PlayerStats;
+  damage_made?: number;
   team?: "Red" | "Blue" | string;
 };
 
@@ -88,17 +89,22 @@ function readApiError(x: unknown): string | null {
 
 
 function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): 
-{ kills: number | null; deaths: number | null; assists: number |null; acs: number |null; headshots: number |null } {
+{ kills: number | null; deaths: number | null; assists: number | null; acs: number | null; bodyshots: number | null;
+  headshots: number | null; legshots: number | null; damage_dealt: number | null } {
 
   const target = match_player(match, who )
-  if (!target) return { kills: null, deaths: null, assists: null, acs: null, headshots: null };
+  if (!target) return { kills: null, deaths: null, assists: null, acs: null, bodyshots: null, headshots: null,
+    legshots: null, damage_dealt: null };
 
   const kills = target.stats?.kills ?? null;
   const deaths = target.stats?.deaths ?? null;
   const assists = target.stats?.assists ?? null;
   const acs = target.stats?.score ?? null;
+  const bodyshots = target.stats?.bodyshots ?? null;
   const headshots = target.stats?.headshots ?? null;
-  return { kills, deaths, assists, acs, headshots};
+  const legshots = target.stats?.legshots ?? null;
+  const damage_dealt = target.damage_made ?? null;
+  return { kills, deaths, assists, acs, bodyshots, headshots, legshots, damage_dealt};
 }
 
 
@@ -179,6 +185,8 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">K/D/A</th>
                 <th className="px-3 py-2">ACS</th>
+                <th className="px-3 py-2">HS%</th>
+                <th className="px-3 py-2">ADR</th>
               </tr>
             </thead>
             <tbody>
@@ -194,6 +202,9 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 
                 const totalRounds = (rounds.red!) + (rounds.blue!);
                 const acs =  Math.round(stats.acs! / totalRounds);
+                const adr =  Math.round(stats.damage_dealt! / totalRounds);
+
+                const hsPercentage = Math.round((stats.headshots!/(stats.headshots! + stats.bodyshots! + stats.legshots!)) * 100);
 
                 const score =
                   myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
@@ -218,12 +229,14 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                     <td className="px-3 py-2">{started}</td>
                     <td className="px-3 py-2">{`${stats.kills}/${stats.deaths}/${stats.assists}`}</td>
                     <td className="px-3 py-2">{acs}</td>
+                    <td className="px-3 py-2">{hsPercentage}</td>
+                    <td className="px-3 py-2">{adr}</td>
                   </tr>
                 );
               })}
               {matches.length === 0 && !apiError && (
                 <tr>
-                  <td className="px-3 py-6 text-gray-500" colSpan={5}>
+                  <td className="px-3 py-6 text-gray-500" colSpan={8}>
                     No matches found for this player/mode.
                   </td>
                 </tr>
