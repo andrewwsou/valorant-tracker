@@ -135,22 +135,29 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
     process.env.NEXT_PUBLIC_BASE_URL ??
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
-  const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
+  // const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
+
+  const [matchesRes, mmrRes] = await Promise.all([
+    fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
+    fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }), // example second endpoint
+  ]);
 
   let matches: HenrikMatchFull[] = [];
+  let mmrHistory: unknown[] = []; // type to your schema
   let apiError = "";
 
-  if (res.ok) {
-    const json = (await res.json()) as ApiResponse<HenrikMatchFull[]>;
+  if (matchesRes.ok) {
+    const json = (await matchesRes.json()) as ApiResponse<HenrikMatchFull[]>;
     matches = Array.isArray(json?.data) ? json.data : [];
   } else {
-    try {
-      const errJson = (await res.json()) as unknown;
-      const msg = readApiError(errJson);
-      apiError = msg ?? `API error ${res.status}`;
-    } catch {
-      apiError = `API error ${res.status}`;
-    }
+    apiError = `Matches error ${matchesRes.status}`;
+  }
+
+  if (mmrRes.ok) {
+    const json = (await mmrRes.json()) as ApiResponse<unknown[]>;
+    mmrHistory = Array.isArray(json?.data) ? json.data : [];
+  } else {
+    apiError = apiError || `MMR history error ${mmrRes.status}`;
   }
 
   return (
