@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 type Metadata = {
   map?: string;
   mode?: string;
@@ -8,13 +10,6 @@ type Metadata = {
 type Teams = { red?: { rounds_won?: number }; blue?: { rounds_won?: number } };
 type Segment = { stats?: { result?: string } };
 type Round = { winning_team?: 'Red' | 'Blue' | string};
-
-type HenrikMatch = {
-  metadata?: Metadata;
-  teams?: Teams;
-  rounds?: Round[];
-  segments?: Segment[];
-};
 
 type ApiResponse<T> = { status?: number; data?: T; error?: string };
 
@@ -39,7 +34,17 @@ type PlayerLite = {
   team?: "Red" | "Blue" | string;
 };
 
-type HenrikMatchFull = HenrikMatch & {
+// type HenrikMatch = {
+//   metadata?: Metadata;
+//   teams?: Teams;
+//   rounds?: Round[];
+//   segments?: Segment[];
+// };
+
+type HenrikMatchFull = {
+  metadata?: Metadata;
+  rounds?: Round[];
+  segments?: Segment[];
   players?: {
     all_players?: PlayerLite[];
     red?: PlayerLite[];
@@ -49,6 +54,20 @@ type HenrikMatchFull = HenrikMatch & {
     red?: { rounds_won?: number; rounds_lost?: number; has_won?: boolean };
     blue?: { rounds_won?: number; rounds_lost?: number; has_won?: boolean };
   };
+};
+
+// type HenrikMatch = {
+//   metadata?: Metadata;
+//   teams?: Teams;
+//   rounds?: Round[];
+//   segments?: Segment[];
+// };
+
+type EloData = {
+  currenttier_patched?: string;
+  images?: { small?: string; large?: string };
+  match_id?: string;
+  mmr_change_to_last_game?: number;
 };
 
                 
@@ -143,22 +162,35 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   ]);
 
   let matches: HenrikMatchFull[] = [];
-  let mmrHistory: unknown[] = []; // type to your schema
+  let elo: EloData[] = [];
   let apiError = "";
 
   if (matchesRes.ok) {
-    const json = (await matchesRes.json()) as ApiResponse<HenrikMatchFull[]>;
+    const json = (await matchesRes.json());
     matches = Array.isArray(json?.data) ? json.data : [];
   } else {
     apiError = `Matches error ${matchesRes.status}`;
   }
 
   if (mmrRes.ok) {
-    const json = (await mmrRes.json()) as ApiResponse<unknown[]>;
-    mmrHistory = Array.isArray(json?.data) ? json.data : [];
+    const json = (await mmrRes.json()) as ApiResponse<EloData[]>;
+    elo = Array.isArray(json?.data) ? json.data : [];
+    console.log(elo);
   } else {
-    apiError = apiError || `MMR history error ${mmrRes.status}`;
+    apiError = `MMR history error ${mmrRes.status}`;
   }
+
+  const eloMap = new Map<string, EloData>();
+  for (const e of elo) {
+    eloMap.set(e.match_id!, e);
+  }
+
+  type Row = { match: HenrikMatchFull; elo: EloData | null };
+  const rows: Row[] = matches.map((m) => {
+    const id = m?.metadata?.matchid ?? "";
+    const e = id ? (eloMap.get(id) ?? null) : null;
+    return { match: m, elo: e };
+  });
 
   return (
     <main className="mx-auto max-w-5xl p-6 space-y-6">
@@ -187,6 +219,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
               <tr>
                 <th className="px-3 py-2"></th>
                 <th className="px-3 py-2">Mode</th>
+                <th className="px-3 py-2">Rank</th>
                 <th className="px-3 py-2">Score</th>
                 <th className="px-3 py-2">Result</th>
                 <th className="px-3 py-2">Date</th>
@@ -197,7 +230,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
               </tr>
             </thead>
             <tbody>
-              {matches.map((m, i) => {
+              {rows.map(( { match: m, elo: e }, i) => {
                 const map = m.metadata?.map ?? "-";
                 const mode = m.metadata?.mode ?? "-";
 
@@ -219,16 +252,19 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 const result = resultForTeam(myTeam, rounds, fallback);
 
                 const game_start = m.metadata?.game_start;
-
+                
                 const started =
                   typeof game_start === 'number'
                     ? date_format.format(game_start * 1000)
                     : 'Date Unavailable';
 
+                const rank_icon: string = e!.images!.small!
+
                 return (
                   <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
                     <td className="px-3 py-2">{map}</td>
                     <td className="px-3 py-2">{mode}</td>
+                    <td className="px-3 py-2">{<Image src={rank_icon} alt={"Rank"} width={5} height={5}/>}</td>
                     <td className="px-3 py-2">{score}</td>
                     <td className="px-3 py-2">
                       {result}
