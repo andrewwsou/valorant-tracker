@@ -29,6 +29,7 @@ type PlayerLite = {
   puuid?: string;
   name?: string;
   tag?: string;
+  assets?: { agent?: { small: string } };
   stats?: PlayerStats;
   damage_made?: number;
   team?: "Red" | "Blue" | string;
@@ -109,11 +110,11 @@ function readApiError(x: unknown): string | null {
 
 function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): 
 { kills: number | null; deaths: number | null; assists: number | null; acs: number | null; bodyshots: number | null;
-  headshots: number | null; legshots: number | null; damage_dealt: number | null } {
+  headshots: number | null; legshots: number | null; damage_dealt: number | null; agentIcon: string } {
 
   const target = match_player(match, who )
   if (!target) return { kills: null, deaths: null, assists: null, acs: null, bodyshots: null, headshots: null,
-    legshots: null, damage_dealt: null };
+    legshots: null, damage_dealt: null, agentIcon: "" };
 
   const kills = target.stats?.kills ?? null;
   const deaths = target.stats?.deaths ?? null;
@@ -123,7 +124,8 @@ function getPlayerStats( match: HenrikMatchFull, who: { puuid?: string; name?: s
   const headshots = target.stats?.headshots ?? null;
   const legshots = target.stats?.legshots ?? null;
   const damage_dealt = target.damage_made ?? null;
-  return { kills, deaths, assists, acs, bodyshots, headshots, legshots, damage_dealt};
+  const agentIcon = target.assets!.agent?.small ?? "Agent Icon not Working";
+  return { kills, deaths, assists, acs, bodyshots, headshots, legshots, damage_dealt, agentIcon};
 }
 
 
@@ -175,7 +177,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   if (mmrRes.ok) {
     const json = (await mmrRes.json()) as ApiResponse<EloData[]>;
     elo = Array.isArray(json?.data) ? json.data : [];
-    console.log(elo);
+    // console.log(elo);
   } else {
     apiError = `MMR history error ${mmrRes.status}`;
   }
@@ -218,6 +220,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
             <thead className="bg-[#2b3d50] text-left text-gray-300">
               <tr>
                 <th className="px-3 py-2"></th>
+                <th className="px-3 py-2"></th>
                 <th className="px-3 py-2">Mode</th>
                 <th className="px-3 py-2">Rank</th>
                 <th className="px-3 py-2">Score</th>
@@ -258,13 +261,15 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                     ? date_format.format(game_start * 1000)
                     : 'Date Unavailable';
 
-                const rank_icon: string = e!.images!.small!
+                const rankIcon: string = e!.images!.small!
+
 
                 return (
                   <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
+                    <td className="px-3 py-2">{<Image src={stats.agentIcon} alt={"Agent"} width={35} height={35}/>}</td>
                     <td className="px-3 py-2">{map}</td>
                     <td className="px-3 py-2">{mode}</td>
-                    <td className="px-3 py-2">{<Image src={rank_icon} alt={"Rank"} width={30} height={30}/>}</td>
+                    <td className="px-3 py-2">{<Image src={rankIcon} alt={"Rank"} width={30} height={30}/>}</td>
                     <td className="px-3 py-2">{score}</td>
                     <td className="px-3 py-2">
                       {result}
