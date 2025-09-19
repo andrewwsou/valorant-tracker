@@ -19,10 +19,10 @@ export default function PlayerBanner({
     <section className="relative h-40 md:h-56 lg:h-50 overflow-hidden rounded-2xl">
     { wideCard ? (
     <Image
-        src={wideCard}
+        src={'/banners/banner3.webp'}
         alt={`${name ?? "Player"} banner`}
         fill
-        className="object-cover"
+        className="object-cover object-[50%_10%]"
         priority
         sizes="50vw"
     /> ) : null}

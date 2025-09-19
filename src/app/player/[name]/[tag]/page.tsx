@@ -1,6 +1,7 @@
 import Image from 'next/image';
 import CurrentRating from "@/components/currentrating";
 import PlayerBanner from '@/components/playerbanner';
+import OverallStats from '@/components/overallstats';
 
 type Metadata = {
   map?: string;
@@ -82,6 +83,7 @@ type PlayerCardData = {
   card: { small: string; large: string; wide: string; }
 };
 
+
                 
 const date_format = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
@@ -150,6 +152,24 @@ function match_player( match: HenrikMatchFull, who: { puuid?: string; name?: str
   });
 }
 
+function winrateResults(matches: HenrikMatchFull[], who: { puuid?: string; name?: string; tag?: string }):
+ { wins: number; losses: number; draws: number; winrate: number; } {
+  let wins = 0, losses = 0, draws = 0;
+
+  for (const m of matches) {
+    const team = findPlayerTeam(m, who);
+    const res = resultForTeam(team, getRounds(m));
+    if (res === "W") wins++;
+    else if (res === "L") losses++;
+    else if (res === "D") draws++;
+  }
+
+  const totalMatches = wins + losses;
+  const winrate = totalMatches ? Math.round((wins / totalMatches) * 100) : 0;
+
+  return { wins, losses, draws, winrate };
+}
+
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
   const name = decodeURIComponent(rawName);
@@ -166,8 +186,6 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ??
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
-
-  // const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
 
   const [matchesRes, eloRes, overallRes, cardRes] = await Promise.all([
     fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
@@ -195,7 +213,6 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   } else {
     apiError = `Elo history error ${eloRes.status}`;
   }
-  // console.log(elo)
   
   if (overallRes.ok) {
     const json = (await overallRes.json()) as ApiResponse<OverallData>;
@@ -216,6 +233,12 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   for (const e of elo) {
     eloMap.set(e.match_id!, e);
   }
+
+  const { wins, losses, draws, winrate } = winrateResults(matches, { name, tag });
+  // console.log(wins)
+  // console.log(losses)
+  // console.log(draws)
+  // console.log(winrate)
 
   type Row = { match: HenrikMatchFull; elo: EloData | null };
   const rows: Row[] = matches.map((m) => {
@@ -257,6 +280,15 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
           </aside>
 
            <div className="lg:col-span-9 min-w-0 space-y-6">
+            <div>
+              <OverallStats
+                wins={wins}
+                losses={losses}
+                draws={draws}
+                winrate={winrate}
+              />
+            </div>
+
             <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
             <div className="overflow-x-auto rounded border border-slate-700">
               <table className="min-w-full text-sm">
