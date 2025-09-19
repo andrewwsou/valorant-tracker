@@ -278,16 +278,16 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
               peakRankText={overall?.highest_rank?.patched_tier}
             />
           </aside>
-
-           <div className="lg:col-span-9 min-w-0 space-y-6">
-            <div>
+           <div className="lg:col-span-9">
+              <p className="py-2">
+                Overall Stats
+              </p>
               <OverallStats
                 wins={wins}
                 losses={losses}
                 draws={draws}
                 winrate={winrate}
               />
-            </div>
 
             <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
             <div className="overflow-x-auto rounded border border-slate-700">

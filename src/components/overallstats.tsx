@@ -1,5 +1,3 @@
-import Image from "next/image";
-
 type Props = {
   wins?: number;
   losses?: number;
@@ -7,34 +5,41 @@ type Props = {
   winrate?: number;
 };
 
+function Stat({
+  label,
+  value,
+  accent = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  accent?: boolean;
+}) {
+  return (
+    <div className={`relative ${accent ? "pl-3 border-l border-slate-600" : ""}`}>
+      <div className="flex flex-col leading-tight">
+        <span className="text-xs uppercase tracking-wide text-slate-400">
+          {label}
+        </span>
+        <span className="text-3xl font-extrabold text-slate-100 tabular-nums">
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
 
-export default function OverallStats({
-  wins,
-  losses,
-  draws,
-  winrate,
-}: Props) {
+export default function OverallStats({ wins, losses, draws, winrate }: Props) {
 
   return (
-      <section className="relative overflow-hidden rounded-2xl border bg-slate-800 p-5 text-slate-200">  
-        <div className="grid grid-cols-1 lg:grid-cols-1 gap-2">
-          <div className="lg:col-span-1">
-            <h1 className="text-xl font-semibold tracking-tight">
-                {wins} W
-            </h1>
-          </div>
-          <div className="lg:col-span-1">
-            <h1 className="text-xl font-semibold tracking-tight">
-                {losses} L
-            </h1>
-          </div>
-  
-          <div className="lg:col-span-1">
-              <span className="rounded text-white/70 py-0.5">
-                hi
-              </span>
-          </div>
-        </div>
-      </section>
-    );
-  }
+    <section className="relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 p-5 text-slate-200">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+        <Stat label="Wins" value={wins} accent />
+        <Stat label="Losses" value={losses} />
+        <Stat label="Draws" value={draws} />
+        <Stat label="Winrate" value={`${winrate}%`} />
+        
+        
+      </div>
+    </section>
+  );
+}
