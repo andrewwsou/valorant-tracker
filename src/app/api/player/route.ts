@@ -8,7 +8,6 @@ export async function GET(req: NextRequest) {
     
     const { searchParams } = new URL(req.url);
 
-    const region = (searchParams.get('region') ?? 'na').trim();
     const name   = (searchParams.get('name') ?? '').trim();
     const tag    = (searchParams.get('tag') ?? '').trim();
 
@@ -17,8 +16,8 @@ export async function GET(req: NextRequest) {
     }
 
     const api_call =
-      `https://api.henrikdev.xyz/valorant/v2/mmr/` +
-      `${region}/${enc(name)}/${enc(tag)}`;
+      `https://api.henrikdev.xyz/valorant/v1/account/` +
+      `${enc(name)}/${enc(tag)}`;
 
     const r = await fetch(api_call, {
       headers: {
@@ -31,7 +30,7 @@ export async function GET(req: NextRequest) {
     const contentType = r.headers.get('content-type') ?? 'application/json';
 
     // console.log("YO")
-    // const preview = text.slice(0, 1000);
+    // const preview = text.slice(0, 10000);
     // console.log('[matches] upstream status/content-type:', r.status, contentType);
     // console.log('[matches] upstream body (preview 400):', preview);
 

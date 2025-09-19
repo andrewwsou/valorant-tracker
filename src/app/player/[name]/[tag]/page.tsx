@@ -1,5 +1,6 @@
 import Image from 'next/image';
 import CurrentRating from "@/components/currentrating";
+import PlayerBanner from '@/components/playerbanner';
 
 type Metadata = {
   map?: string;
@@ -75,6 +76,10 @@ type EloData = {
 type OverallData = {
   current_data?: { currenttierpatched?: string; images?: { small?: string; large?: string; }; };
   highest_rank?: { patched_tier?: string; season?: string };
+};
+
+type PlayerCardData = {
+  card: { small: string; large: string; wide: string; }
 };
 
                 
@@ -164,15 +169,17 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
   // const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
 
-  const [matchesRes, eloRes, overallRes] = await Promise.all([
+  const [matchesRes, eloRes, overallRes, cardRes] = await Promise.all([
     fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
     fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }),
     fetch(`${base}/api/overall?${qs}`, { cache: "no-store" }), 
+    fetch(`${base}/api/player?${qs}`, { cache: "no-store" }), 
   ]);
 
   let matches: HenrikMatchFull[] = [];
   let elo: EloData[] = [];
   let overall: OverallData | null = null;
+  let card: PlayerCardData | null = null;
   let apiError = "";
 
   if (matchesRes.ok) {
@@ -196,6 +203,13 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   } else {
     apiError = `Overall history error ${overallRes.status}`;
   }
+
+  if (cardRes.ok) {
+    const json = (await cardRes.json()) as ApiResponse<PlayerCardData>;
+    card = json?.data ?? null;
+  } else {
+    apiError = `Overall history error ${cardRes.status}`;
+  }
   // console.log(overall)
 
   const eloMap = new Map<string, EloData>();
@@ -212,15 +226,14 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
   return (
     <main className="mx-auto max-w-7xl p-6 space-y-6">
-      <header className="flex items-center gap-4">
-        <div className="h-16 w-16 rounded bg-gray-200" />
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {name}
-            <span className="text-gray-500">#{tag}</span>
-          </h1>
-          <p className="text-sm text-gray-500">Competitive · last {matches.length} matches</p>
-        </div>
+      <header className="grid grid-cols-1 col-span-1 max-w-7xl max-h-sm gap-4">
+        <PlayerBanner
+          name={name}
+          tag={tag}
+          smallCard={card?.card.small}
+          // largeCard={card?.card.large}
+          wideCard={card?.card.wide}
+        /> 
       </header>
 
       {apiError && (
@@ -233,13 +246,12 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <aside className="lg:col-span-3">
             <p className="py-2">
-              Current Rank:
+              Current Rank
             </p>
 
             <CurrentRating
               rankIcon={overall?.current_data?.images?.small}
               rankText={overall?.current_data?.currenttierpatched}
-              // agentIcon={overall?.current_data?.images?.small}
               peakRankText={overall?.highest_rank?.patched_tier}
             />
           </aside>

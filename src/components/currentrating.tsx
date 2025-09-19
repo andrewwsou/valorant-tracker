@@ -15,7 +15,7 @@ export default function CurrentRating({
 }: Props) {
 
   return (
-    <section className="relative overflow-hidden rounded-2xl border bg-slate-800 p-5 text-slate-50">
+    <section className="relative overflow-hidden rounded-2xl border bg-slate-800 p-5 text-slate-200">
       <div className="pointer-events-none absolute"/>
 
       <div className="relative z-10 flex items-center gap-4">
@@ -25,8 +25,8 @@ export default function CurrentRating({
 
         <div className="flex-1">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {rankText}<span className="text-slate-300"></span>
+            <h1 className="text-xl font-semibold tracking-tight">
+              {rankText}<span className="text-slate-200"></span>
             </h1>
           </div>
 
