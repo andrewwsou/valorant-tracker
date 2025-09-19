@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
     }
 
     const api_call =
-      `https://api.henrikdev.xyz/valorant/v1/mmr-history/` +
+      `https://api.henrikdev.xyz/valorant/v2/mmr/` +
       `${region}/${enc(name)}/${enc(tag)}`;
 
     const r = await fetch(api_call, {
@@ -30,9 +30,10 @@ export async function GET(req: NextRequest) {
     const text = await r.text();
     const contentType = r.headers.get('content-type') ?? 'application/json';
 
-    // const preview = text.slice(0, 1);
-    // console.log('[matches] upstream status/content-type:', r.status, contentType);
-    // console.log('[matches] upstream body (preview 400):', preview);
+    console.log("YO")
+    const preview = text.slice(0, 1000);
+    console.log('[matches] upstream status/content-type:', r.status, contentType);
+    console.log('[matches] upstream body (preview 400):', preview);
 
     return new NextResponse(text, {
       status: r.status,

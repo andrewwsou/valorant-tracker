@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import PlayerBanner from "@/components/playerbanner";
 
 type Metadata = {
   map?: string;
@@ -69,6 +70,11 @@ type EloData = {
   images?: { small?: string; large?: string };
   match_id?: string;
   mmr_change_to_last_game?: number;
+};
+
+type OverallData = {
+  current_data?: { currenttier_patched?: string; images?: { small?: string; large?: string; }; };
+  highest_rank?: { patched_tier?: string; season?: string };
 };
 
                 
@@ -158,13 +164,15 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
   // const res = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
 
-  const [matchesRes, mmrRes] = await Promise.all([
+  const [matchesRes, eloRes, overallRes] = await Promise.all([
     fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
-    fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }), // example second endpoint
+    fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }),
+    fetch(`${base}/api/overall?${qs}`, { cache: "no-store" }), 
   ]);
 
   let matches: HenrikMatchFull[] = [];
   let elo: EloData[] = [];
+  let overall: OverallData | null = null;
   let apiError = "";
 
   if (matchesRes.ok) {
@@ -174,13 +182,21 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
     apiError = `Matches error ${matchesRes.status}`;
   }
 
-  if (mmrRes.ok) {
-    const json = (await mmrRes.json()) as ApiResponse<EloData[]>;
+  if (eloRes.ok) {
+    const json = (await eloRes.json()) as ApiResponse<EloData[]>;
     elo = Array.isArray(json?.data) ? json.data : [];
-    // console.log(elo);
   } else {
-    apiError = `MMR history error ${mmrRes.status}`;
+    apiError = `Elo history error ${eloRes.status}`;
   }
+  // console.log(elo)
+  
+  if (overallRes.ok) {
+    const json = (await overallRes.json()) as ApiResponse<OverallData>;
+    overall = json?.data ?? null;
+  } else {
+    apiError = `Overall history error ${overallRes.status}`;
+  }
+  // console.log(overall)
 
   const eloMap = new Map<string, EloData>();
   for (const e of elo) {
@@ -196,15 +212,25 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
   return (
     <main className="mx-auto max-w-5xl p-6 space-y-6">
+      {/* const stats = getPlayerStats(match, { name, tag }); */}
       <header className="flex items-center gap-4">
-        <div className="h-16 w-16 rounded bg-gray-200" />
+        {/* <div className="h-16 w-16 rounded bg-gray-200" />
         <div>
           <h1 className="text-2xl font-semibold">
             {name}
             <span className="text-gray-500">#{tag}</span>
           </h1>
           <p className="text-sm text-gray-500">Competitive · last {matches.length} matches</p>
-        </div>
+        </div> */}
+        <PlayerBanner
+          name={name}
+          tag={tag}
+          rankIcon={overall?.current_data?.images?.small}
+          rankText={overall?.current_data?.currenttier_patched}
+          agentIcon={overall?.current_data?.images?.small}
+          // peakRankIcon=
+          // peakRankText=
+        />
       </header>
 
       {apiError && (
