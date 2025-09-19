@@ -232,6 +232,10 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <aside className="lg:col-span-3">
+            <p className="py-2">
+              Current Rank:
+            </p>
+
             <CurrentRating
               rankIcon={overall?.current_data?.images?.small}
               rankText={overall?.current_data?.currenttierpatched}

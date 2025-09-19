@@ -3,7 +3,6 @@ import Image from "next/image";
 type Props = {
   rankIcon?: string;   
   rankText?: string;  
-  // agentIcon?: string; 
   peakRankText?: string;
 
 };
@@ -12,7 +11,6 @@ type Props = {
 export default function CurrentRating({
   rankIcon,
   rankText,
-  // agentIcon,
   peakRankText,
 }: Props) {
 
