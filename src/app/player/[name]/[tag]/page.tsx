@@ -1,5 +1,5 @@
 import Image from 'next/image';
-import PlayerBanner from "@/components/playerbanner";
+import CurrentRating from "@/components/currentrating";
 
 type Metadata = {
   map?: string;
@@ -73,7 +73,7 @@ type EloData = {
 };
 
 type OverallData = {
-  current_data?: { currenttier_patched?: string; images?: { small?: string; large?: string; }; };
+  current_data?: { currenttierpatched?: string; images?: { small?: string; large?: string; }; };
   highest_rank?: { patched_tier?: string; season?: string };
 };
 
@@ -211,26 +211,16 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   });
 
   return (
-    <main className="mx-auto max-w-5xl p-6 space-y-6">
-      {/* const stats = getPlayerStats(match, { name, tag }); */}
+    <main className="mx-auto max-w-7xl p-6 space-y-6">
       <header className="flex items-center gap-4">
-        {/* <div className="h-16 w-16 rounded bg-gray-200" />
+        <div className="h-16 w-16 rounded bg-gray-200" />
         <div>
           <h1 className="text-2xl font-semibold">
             {name}
             <span className="text-gray-500">#{tag}</span>
           </h1>
           <p className="text-sm text-gray-500">Competitive · last {matches.length} matches</p>
-        </div> */}
-        <PlayerBanner
-          name={name}
-          tag={tag}
-          rankIcon={overall?.current_data?.images?.small}
-          rankText={overall?.current_data?.currenttier_patched}
-          agentIcon={overall?.current_data?.images?.small}
-          // peakRankIcon=
-          // peakRankText=
-        />
+        </div>
       </header>
 
       {apiError && (
@@ -239,84 +229,96 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
         </div>
       )}
 
-      <section>
-        <h2 className="mb-2 text-lg font-medium">Recent Matches</h2>
-        <div className="overflow-x-auto rounded border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-[#2b3d50] text-left text-gray-300">
-              <tr>
-                <th className="px-3 py-2"></th>
-                <th className="px-3 py-2"></th>
-                <th className="px-3 py-2">Mode</th>
-                <th className="px-3 py-2">Rank</th>
-                <th className="px-3 py-2">Score</th>
-                <th className="px-3 py-2">Result</th>
-                <th className="px-3 py-2">Date</th>
-                <th className="px-3 py-2">K/D/A</th>
-                <th className="px-3 py-2">ACS</th>
-                <th className="px-3 py-2">HS%</th>
-                <th className="px-3 py-2">ADR</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(( { match: m, elo: e }, i) => {
-                const map = m.metadata?.map ?? "-";
-                const mode = m.metadata?.mode ?? "-";
 
-                const rounds = getRounds(m);
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <aside className="lg:col-span-3">
+            <CurrentRating
+              rankIcon={overall?.current_data?.images?.small}
+              rankText={overall?.current_data?.currenttierpatched}
+              // agentIcon={overall?.current_data?.images?.small}
+              peakRankText={overall?.highest_rank?.patched_tier}
+            />
+          </aside>
 
-                const stats = getPlayerStats(m, { name, tag });
-
-                const myTeam = findPlayerTeam(m, { name, tag });
-                
-                const totalRounds = (rounds.red!) + (rounds.blue!);
-                const acs =  Math.round(stats.acs! / totalRounds);
-                const adr =  Math.round(stats.damage_dealt! / totalRounds);
-
-                const hsPercentage = Math.round((stats.headshots!/(stats.headshots! + stats.bodyshots! + stats.legshots!)) * 100);
-
-                const score =
-                  myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
-                const fallback = m.segments?.[0]?.stats?.result ?? "-";
-                const result = resultForTeam(myTeam, rounds, fallback);
-
-                const game_start = m.metadata?.game_start;
-                
-                const started =
-                  typeof game_start === 'number'
-                    ? date_format.format(game_start * 1000)
-                    : 'Date Unavailable';
-
-                const rankIcon: string = e!.images!.small!
-
-
-                return (
-                  <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
-                    <td className="px-3 py-2">{<Image src={stats.agentIcon} alt={"Agent"} width={35} height={35}/>}</td>
-                    <td className="px-3 py-2">{map}</td>
-                    <td className="px-3 py-2">{mode}</td>
-                    <td className="px-3 py-2">{<Image src={rankIcon} alt={"Rank"} width={30} height={30}/>}</td>
-                    <td className="px-3 py-2">{score}</td>
-                    <td className="px-3 py-2">
-                      {result}
-                    </td>
-                    <td className="px-3 py-2">{started}</td>
-                    <td className="px-3 py-2">{`${stats.kills}/${stats.deaths}/${stats.assists}`}</td>
-                    <td className="px-3 py-2">{acs}</td>
-                    <td className="px-3 py-2">{hsPercentage}</td>
-                    <td className="px-3 py-2">{adr}</td>
-                  </tr>
-                );
-              })}
-              {matches.length === 0 && !apiError && (
+           <div className="lg:col-span-9 min-w-0 space-y-6">
+            <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
+            <div className="overflow-x-auto rounded border border-slate-700">
+              <table className="min-w-full text-sm">
+              <thead className="bg-[#2b3d50] text-left text-gray-300">
                 <tr>
-                  <td className="px-3 py-6 text-gray-500" colSpan={8}>
-                    No matches found for this player/mode.
-                  </td>
+                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-2"></th>
+                  <th className="px-3 py-2">Mode</th>
+                  <th className="px-3 py-2">Rank</th>
+                  <th className="px-3 py-2">Score</th>
+                  <th className="px-3 py-2">Result</th>
+                  <th className="px-3 py-2">Date</th>
+                  <th className="px-3 py-2">K/D/A</th>
+                  <th className="px-3 py-2">ACS</th>
+                  <th className="px-3 py-2">HS%</th>
+                  <th className="px-3 py-2">ADR</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map(( { match: m, elo: e }, i) => {
+                  const map = m.metadata?.map ?? "-";
+                  const mode = m.metadata?.mode ?? "-";
+
+                  const rounds = getRounds(m);
+
+                  const stats = getPlayerStats(m, { name, tag });
+
+                  const myTeam = findPlayerTeam(m, { name, tag });
+                  
+                  const totalRounds = (rounds.red!) + (rounds.blue!);
+                  const acs =  Math.round(stats.acs! / totalRounds);
+                  const adr =  Math.round(stats.damage_dealt! / totalRounds);
+
+                  const hsPercentage = Math.round((stats.headshots!/(stats.headshots! + stats.bodyshots! + stats.legshots!)) * 100);
+
+                  const score =
+                    myTeam != "blue" ? `${rounds.red}–${rounds.blue}` :  `${rounds.blue}–${rounds.red}`;
+                  const fallback = m.segments?.[0]?.stats?.result ?? "-";
+                  const result = resultForTeam(myTeam, rounds, fallback);
+
+                  const game_start = m.metadata?.game_start;
+                  
+                  const started =
+                    typeof game_start === 'number'
+                      ? date_format.format(game_start * 1000)
+                      : 'Date Unavailable';
+
+                  const rankIcon: string = e!.images!.small!
+
+
+                  return (
+                    <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
+                      <td className="px-3 py-2">{<Image src={stats.agentIcon} alt={"Agent"} width={35} height={35}/>}</td>
+                      <td className="px-3 py-2">{map}</td>
+                      <td className="px-3 py-2">{mode}</td>
+                      <td className="px-3 py-2">{<Image src={rankIcon} alt={"Rank"} width={30} height={30}/>}</td>
+                      <td className="px-3 py-2">{score}</td>
+                      <td className="px-3 py-2">
+                        {result}
+                      </td>
+                      <td className="px-3 py-2">{started}</td>
+                      <td className="px-3 py-2">{`${stats.kills}/${stats.deaths}/${stats.assists}`}</td>
+                      <td className="px-3 py-2">{acs}</td>
+                      <td className="px-3 py-2">{hsPercentage}</td>
+                      <td className="px-3 py-2">{adr}</td>
+                    </tr>
+                  );
+                })}
+                {matches.length === 0 && !apiError && (
+                  <tr>
+                    <td className="px-3 py-6 text-gray-500" colSpan={8}>
+                      No matches found for this player/mode.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </main>
