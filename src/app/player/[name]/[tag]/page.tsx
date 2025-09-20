@@ -170,6 +170,24 @@ function winrateResults(matches: HenrikMatchFull[], who: { puuid?: string; name?
   return { wins, losses, draws, winrate };
 }
 
+
+function getKD(matches: HenrikMatchFull[], who: { puuid?: string; name?: string; tag?: string }): string {
+  let kills = 0;
+  let deaths = 0;
+  
+  for (const m of matches) {
+    const target = match_player(m, who)
+
+    kills  += target?.stats?.kills  ?? 0;
+    deaths += target?.stats?.deaths ?? 0;
+
+  }
+
+  const kd = kills / deaths;
+
+  return kd.toFixed(2);
+}
+
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
   const name = decodeURIComponent(rawName);
@@ -235,6 +253,8 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   }
 
   const { wins, losses, draws, winrate } = winrateResults(matches, { name, tag });
+
+  // const { wins, losses, draws, winrate } = winrateResults(matches, { name, tag });
   // console.log(wins)
   // console.log(losses)
   // console.log(draws)
@@ -287,6 +307,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                 losses={losses}
                 draws={draws}
                 winrate={winrate}
+                kd={getKD(matches, { name, tag })}
               />
 
             <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
