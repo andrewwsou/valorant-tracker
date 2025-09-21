@@ -113,33 +113,28 @@ function computeKD(players: Array<PlayerLite | undefined>): string {
   return (kills / deaths).toFixed(2);
 }
 
-function computeACS(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): number {
+function computeACSADR(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): { ACS: number, ADR: number } {
   let totalACS = 0;
   let totalRounds = 0;
+  let totalDamage = 0;
+
   for (const p of players) {
     totalACS += p?.stats?.score ?? 0;
+    totalDamage += p?.damage_made ?? 0 ;
+    console.log(p);
   }
+
   for (const m of matches) {
     const { red, blue } = getRounds(m);
     totalRounds += (red ?? 0) + (blue ?? 0);
   }
 
-  return Math.round(totalACS / totalRounds);
+  const ACS = Math.round(totalACS / totalRounds);
+  const ADR = Math.round(totalDamage / totalRounds);
+
+  return { ACS, ADR };
 }
 
-function computeACS(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): number {
-  let totalACS = 0;
-  let totalRounds = 0;
-  for (const p of players) {
-    totalACS += p?.stats?.score ?? 0;
-  }
-  for (const m of matches) {
-    const { red, blue } = getRounds(m);
-    totalRounds += (red ?? 0) + (blue ?? 0);
-  }
-
-  return Math.round(totalACS / totalRounds);
-}
 
 
 function getRounds(match: HenrikMatchFull): { red: number | null; blue: number | null } {
@@ -251,7 +246,8 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const targets: Array<PlayerLite | undefined> = matches.map((m) => findPlayer(m, who));
 
   const kd = computeKD(targets);
-  const acs = computeACS(matches, targets);
+  const overallACS = computeACSADR(matches, targets).ACS;
+  const overallADR = computeACSADR(matches, targets).ADR;
 
   type Row = { match: HenrikMatchFull; elo: EloData | null; player?: PlayerLite };
   const rows: Row[] = matches.map((m, i) => {
@@ -284,7 +280,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
         <div className="lg:col-span-9">
           <p className="py-2">Overall Stats</p>
-          <OverallStats wins={wins} losses={losses} draws={draws} winrate={winrate} kd={kd} acs={acs} />
+          <OverallStats wins={wins} losses={losses} draws={draws} winrate={winrate} kd={kd} acs={overallACS} adr={overallADR} />
 
           <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
           <div className="overflow-x-auto rounded border border-slate-700">
