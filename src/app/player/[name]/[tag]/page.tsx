@@ -2,6 +2,7 @@ import Image from "next/image";
 import CurrentRating from "@/components/currentrating";
 import PlayerBanner from "@/components/playerbanner";
 import OverallStats from "@/components/overallstats";
+import { computeRadarPoints } from "recharts/types/polar/Radar";
 
 type Metadata = {
   map?: string;
@@ -104,14 +105,42 @@ function extractStats(p?: PlayerLite) {
 }
 
 function computeKD(players: Array<PlayerLite | undefined>): string {
-  let kills = 0,
-    deaths = 0;
+  let kills = 0, deaths = 0;
   for (const p of players) {
     kills += p?.stats?.kills ?? 0;
     deaths += p?.stats?.deaths ?? 0;
   }
   return (kills / deaths).toFixed(2);
 }
+
+function computeACS(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): number {
+  let totalACS = 0;
+  let totalRounds = 0;
+  for (const p of players) {
+    totalACS += p?.stats?.score ?? 0;
+  }
+  for (const m of matches) {
+    const { red, blue } = getRounds(m);
+    totalRounds += (red ?? 0) + (blue ?? 0);
+  }
+
+  return Math.round(totalACS / totalRounds);
+}
+
+function computeACS(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): number {
+  let totalACS = 0;
+  let totalRounds = 0;
+  for (const p of players) {
+    totalACS += p?.stats?.score ?? 0;
+  }
+  for (const m of matches) {
+    const { red, blue } = getRounds(m);
+    totalRounds += (red ?? 0) + (blue ?? 0);
+  }
+
+  return Math.round(totalACS / totalRounds);
+}
+
 
 function getRounds(match: HenrikMatchFull): { red: number | null; blue: number | null } {
   const red = match?.teams?.red?.rounds_won ?? null;
@@ -131,19 +160,14 @@ function resultForTeam(
   return weWon ? "W" : "L";
 }
 
-function findPlayerTeam(
-  match: HenrikMatchFull,
-  who: { puuid?: string; name?: string; tag?: string }
-): "red" | "blue" | null {
+function findPlayerTeam(match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): "red" | "blue" | null {
   const player = findPlayer(match, who);
   const t = player?.team?.toLowerCase?.();
   return t === "red" || t === "blue" ? t : null;
 }
 
-function winrateResults(
-  matches: HenrikMatchFull[],
-  who: { puuid?: string; name?: string; tag?: string }
-): { wins: number; losses: number; draws: number; winrate: number } {
+function winrateResults(matches: HenrikMatchFull[], who: { puuid?: string; name?: string; tag?: string }):
+ { wins: number; losses: number; draws: number; winrate: number } {
   let wins = 0,
     losses = 0,
     draws = 0;
@@ -227,6 +251,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const targets: Array<PlayerLite | undefined> = matches.map((m) => findPlayer(m, who));
 
   const kd = computeKD(targets);
+  const acs = computeACS(matches, targets);
 
   type Row = { match: HenrikMatchFull; elo: EloData | null; player?: PlayerLite };
   const rows: Row[] = matches.map((m, i) => {
@@ -259,7 +284,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
         <div className="lg:col-span-9">
           <p className="py-2">Overall Stats</p>
-          <OverallStats wins={wins} losses={losses} draws={draws} winrate={winrate} kd={kd} />
+          <OverallStats wins={wins} losses={losses} draws={draws} winrate={winrate} kd={kd} acs={acs} />
 
           <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
           <div className="overflow-x-auto rounded border border-slate-700">
@@ -289,16 +314,13 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
                   const ps = extractStats(player);
 
-                  const acs =
-                    totalRounds > 0 && ps.acs != null ? Math.round(ps.acs / totalRounds) : 0;
-                  const adr =
-                    totalRounds > 0 && ps.damage_dealt != null
+                  const acs = totalRounds > 0 && ps.acs != null ? Math.round(ps.acs / totalRounds) : 0;
+                  const adr = totalRounds > 0 && ps.damage_dealt != null
                       ? Math.round(ps.damage_dealt / totalRounds)
                       : 0;
 
-                  const hsDen =
-                    (ps.headshots ?? 0) + (ps.bodyshots ?? 0) + (ps.legshots ?? 0);
-                  const hsPercentage = hsDen > 0 ? Math.round(((ps.headshots ?? 0) / hsDen) * 100) : 0;
+                  const allShots = (ps.headshots ?? 0) + (ps.bodyshots ?? 0) + (ps.legshots ?? 0);
+                  const hsPercentage = allShots > 0 ? Math.round(((ps.headshots ?? 0) / allShots) * 100) : 0;
 
                   const team = ps.team ?? findPlayerTeam(m, who);
                   const score =

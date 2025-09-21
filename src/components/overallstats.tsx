@@ -4,6 +4,7 @@ type Props = {
   draws?: number;
   winrate?: number;
   kd?: string;
+  acs?: number;
 };
 
 function Stat({
@@ -29,7 +30,7 @@ function Stat({
   );
 }
 
-export default function OverallStats({ wins, losses, draws, winrate, kd }: Props) {
+export default function OverallStats({ wins, losses, draws, winrate, kd, acs }: Props) {
 
   return (
     <section className="relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 p-5 text-slate-200">
@@ -39,7 +40,7 @@ export default function OverallStats({ wins, losses, draws, winrate, kd }: Props
         <Stat label="Draws" value={draws} />
         <Stat label="Winrate" value={`${winrate}%`} />
         <Stat label="KD" value={kd} accent/>
-
+        <Stat label="ACS" value={acs} />
         
       </div>
     </section>
