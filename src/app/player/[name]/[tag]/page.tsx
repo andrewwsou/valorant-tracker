@@ -2,7 +2,7 @@ import Image from "next/image";
 import CurrentRating from "@/components/currentrating";
 import PlayerBanner from "@/components/playerbanner";
 import OverallStats from "@/components/overallstats";
-import { computeRadarPoints } from "recharts/types/polar/Radar";
+// import { computeRadarPoints } from "recharts/types/polar/Radar";
 
 type Metadata = {
   map?: string;
@@ -69,17 +69,34 @@ type PlayerCardData = {
   card: { small: string; large: string; wide: string };
 };
 
+type DbRow = {
+  matchId: string;
+  map: string | null;
+  mode: string | null;
+  region: string | null;
+  startedAt: string | null;
+  roundsRed: number | null;
+  roundsBlue: number | null;
+
+  team: string | null;
+  kills: number | null;
+  deaths: number | null;
+  assists: number | null;
+  score: number | null;
+  damage: number | null;
+  headshots: number | null;
+  bodyshots: number | null;
+  legshots: number | null;
+  agentIcon: string | null;
+};
+
 const date_format = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   dateStyle: "short",
   timeStyle: "short",
 });
 
-
-function findPlayer(
-  match: HenrikMatchFull,
-  who: { puuid?: string; name?: string; tag?: string }
-): PlayerLite | undefined {
+function findPlayer(match: HenrikMatchFull, who: { puuid?: string; name?: string; tag?: string }): PlayerLite | undefined {
   const everyone = match?.players?.all_players ?? [];
   return everyone.find((p) => {
     if (who.puuid && p.puuid) return p.puuid === who.puuid;
@@ -105,7 +122,8 @@ function extractStats(p?: PlayerLite) {
 }
 
 function computeKD(players: Array<PlayerLite | undefined>): string {
-  let kills = 0, deaths = 0;
+  let kills = 0,
+    deaths = 0;
   for (const p of players) {
     kills += p?.stats?.kills ?? 0;
     deaths += p?.stats?.deaths ?? 0;
@@ -113,15 +131,25 @@ function computeKD(players: Array<PlayerLite | undefined>): string {
   return (kills / deaths).toFixed(2);
 }
 
-function computeACSADR(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): { ACS: number, ADR: number } {
+function computeKDFromDb(rows: DbRow[]): string {
+  let kills = 0;
+  let deaths = 0;
+  for (const r of rows) {
+    kills += r.kills ?? 0;
+    deaths += r.deaths ?? 0;
+  }
+  return deaths ? (kills / deaths).toFixed(2) : "0.00";
+}
+
+function computeACSADR(matches: HenrikMatchFull[], players: Array<PlayerLite | undefined>): { ACS: number; ADR: number } {
   let totalACS = 0;
   let totalRounds = 0;
   let totalDamage = 0;
 
   for (const p of players) {
     totalACS += p?.stats?.score ?? 0;
-    totalDamage += p?.damage_made ?? 0 ;
-    console.log(p);
+    totalDamage += p?.damage_made ?? 0;
+    // console.log(p);
   }
 
   for (const m of matches) {
@@ -135,7 +163,21 @@ function computeACSADR(matches: HenrikMatchFull[], players: Array<PlayerLite | u
   return { ACS, ADR };
 }
 
+function computeACSADRFromDb(rows: DbRow[]): { ACS: number; ADR: number } {
+  let totalScore = 0;
+  let totalDamage = 0;
+  let totalRounds = 0;
 
+  for (const r of rows) {
+    totalScore += r.score ?? 0;
+    totalDamage += r.damage ?? 0;
+    totalRounds += (r.roundsRed ?? 0) + (r.roundsBlue ?? 0);
+  }
+
+  const ACS = totalRounds ? Math.round(totalScore / totalRounds) : 0;
+  const ADR = totalRounds ? Math.round(totalDamage / totalRounds) : 0;
+  return { ACS, ADR };
+}
 
 function getRounds(match: HenrikMatchFull): { red: number | null; blue: number | null } {
   const red = match?.teams?.red?.rounds_won ?? null;
@@ -161,8 +203,10 @@ function findPlayerTeam(match: HenrikMatchFull, who: { puuid?: string; name?: st
   return t === "red" || t === "blue" ? t : null;
 }
 
-function winrateResults(matches: HenrikMatchFull[], who: { puuid?: string; name?: string; tag?: string }):
- { wins: number; losses: number; draws: number; winrate: number } {
+function winrateResults(
+  matches: HenrikMatchFull[],
+  who: { puuid?: string; name?: string; tag?: string }
+): { wins: number; losses: number; draws: number; winrate: number } {
   let wins = 0,
     losses = 0,
     draws = 0;
@@ -180,6 +224,35 @@ function winrateResults(matches: HenrikMatchFull[], who: { puuid?: string; name?
   return { wins, losses, draws, winrate };
 }
 
+function winrateFromDb(rows: DbRow[]): { wins: number; losses: number; draws: number; winrate: number } {
+  let wins = 0;
+  let losses = 0;
+  let draws = 0;
+
+  for (const r of rows) {
+    const rr = r.roundsRed;
+    const rb = r.roundsBlue;
+    const team = r.team?.toLowerCase();
+
+    if (rr == null || rb == null) continue;
+    if (team !== "red" && team !== "blue") continue;
+
+    if (rr === rb) {
+      draws++;
+      continue;
+    }
+
+    const redWon = rr > rb;
+    const weWon = team === "red" ? redWon : !redWon;
+
+    if (weWon) wins++;
+    else losses++;
+  }
+
+  const totalMatches = wins + losses;
+  const winrate = totalMatches ? Math.round((wins / totalMatches) * 100) : 0;
+  return { wins, losses, draws, winrate };
+}
 
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
@@ -199,25 +272,54 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
     process.env.NEXT_PUBLIC_BASE_URL ??
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
+  // ORIGINAL FETCH (api)
+
+  // const [matchesRes, eloRes, overallRes, cardRes] = await Promise.all([
+  //   fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
+  //   fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }),
+  //   fetch(`${base}/api/overall?${qs}`, { cache: "no-store" }),
+  //   fetch(`${base}/api/player?${qs}`, { cache: "no-store" }),
+  // ]);
+
+  await fetch(`${base}/api/sync?${qs}`, { method: "POST", cache: "no-store" });
+
   const [matchesRes, eloRes, overallRes, cardRes] = await Promise.all([
-    fetch(`${base}/api/matches?${qs}`, { cache: "no-store" }),
+    fetch(`${base}/api/db/matches?name=${encodeURIComponent(name)}&tag=${encodeURIComponent(tag)}&limit=10`, {
+      cache: "no-store",
+    }),
     fetch(`${base}/api/elo?${qs}`, { cache: "no-store" }),
     fetch(`${base}/api/overall?${qs}`, { cache: "no-store" }),
     fetch(`${base}/api/player?${qs}`, { cache: "no-store" }),
   ]);
 
-  let matches: HenrikMatchFull[] = [];
+
+  // let matches: HenrikMatchFull[] = [];
+  // let elo: EloData[] = [];
+  // let overall: OverallData | null = null;
+  // let card: PlayerCardData | null = null;
+  // let apiError = "";
+
+  let dbRows: DbRow[] = [];
   let elo: EloData[] = [];
   let overall: OverallData | null = null;
   let card: PlayerCardData | null = null;
   let apiError = "";
 
+
+  // if (matchesRes.ok) {
+  //   const json = await matchesRes.json();
+  //   matches = Array.isArray(json?.data) ? json.data : [];
+  // } else {
+  //   apiError = `Matches error ${matchesRes.status}`;
+  // }
+
   if (matchesRes.ok) {
     const json = await matchesRes.json();
-    matches = Array.isArray(json?.data) ? json.data : [];
+    dbRows = Array.isArray(json?.data) ? json.data : [];
   } else {
-    apiError = `Matches error ${matchesRes.status}`;
+    apiError = `DB matches error ${matchesRes.status}`;
   }
+
 
   if (eloRes.ok) {
     const json = (await eloRes.json()) as ApiResponse<EloData[]>;
@@ -243,20 +345,25 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const eloMap = new Map<string, EloData>();
   for (const e of elo) if (e.match_id) eloMap.set(e.match_id, e);
 
-  const targets: Array<PlayerLite | undefined> = matches.map((m) => findPlayer(m, who));
 
-  const kd = computeKD(targets);
-  const overallACS = computeACSADR(matches, targets).ACS;
-  const overallADR = computeACSADR(matches, targets).ADR;
+  // const targets: Array<PlayerLite | undefined> = matches.map((m) => findPlayer(m, who));
+  // const kd = computeKD(targets);
+  // const overallACS = computeACSADR(matches, targets).ACS;
+  // const overallADR = computeACSADR(matches, targets).ADR;
 
-  type Row = { match: HenrikMatchFull; elo: EloData | null; player?: PlayerLite };
-  const rows: Row[] = matches.map((m, i) => {
-    const id = m?.metadata?.matchid ?? "";
-    const e = id ? eloMap.get(id) ?? null : null;
-    return { match: m, elo: e, player: targets[i] };
-  });
+  // type Row = { match: HenrikMatchFull; elo: EloData | null; player?: PlayerLite };
+  // const rows: Row[] = matches.map((m, i) => {
+  //   const id = m?.metadata?.matchid ?? "";
+  //   const e = id ? eloMap.get(id) ?? null : null;
+  //   return { match: m, elo: e, player: targets[i] };
+  // });
 
-  const { wins, losses, draws, winrate } = winrateResults(matches, who);
+  // const { wins, losses, draws, winrate } = winrateResults(matches, who);
+
+  const kd = computeKDFromDb(dbRows);
+  const overallACS = computeACSADRFromDb(dbRows).ACS;
+  const overallADR = computeACSADRFromDb(dbRows).ADR;
+  const { wins, losses, draws, winrate } = winrateFromDb(dbRows);
 
   return (
     <main className="mx-auto max-w-7xl p-6 space-y-6">
@@ -300,8 +407,9 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                   <th className="px-3 py-2">ADR</th>
                 </tr>
               </thead>
+
               <tbody>
-                {rows.map(({ match: m, elo: e, player }, i) => {
+                {/* {rows.map(({ match: m, elo: e, player }, i) => {
                   const map = m.metadata?.map ?? "-";
                   const mode = m.metadata?.mode ?? "-";
 
@@ -311,9 +419,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                   const ps = extractStats(player);
 
                   const acs = totalRounds > 0 && ps.acs != null ? Math.round(ps.acs / totalRounds) : 0;
-                  const adr = totalRounds > 0 && ps.damage_dealt != null
-                      ? Math.round(ps.damage_dealt / totalRounds)
-                      : 0;
+                  const adr = totalRounds > 0 && ps.damage_dealt != null ? Math.round(ps.damage_dealt / totalRounds) : 0;
 
                   const allShots = (ps.headshots ?? 0) + (ps.bodyshots ?? 0) + (ps.legshots ?? 0);
                   const hsPercentage = allShots > 0 ? Math.round(((ps.headshots ?? 0) / allShots) * 100) : 0;
@@ -325,24 +431,74 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                   const result = resultForTeam(team ?? null, rounds, fallback);
 
                   const game_start = m.metadata?.game_start;
-                  const started =
-                    typeof game_start === "number"
-                      ? date_format.format(game_start * 1000)
-                      : "Date Unavailable";
+                  const started = typeof game_start === "number" ? date_format.format(game_start * 1000) : "Date Unavailable";
 
                   const rankIcon = e?.images?.small;
 
                   return (
                     <tr key={m.metadata?.matchid ?? `m-${i}`} className="border-t">
                       <td className="px-3 py-2">
-                        {ps.agentIcon ? (
-                          <Image src={ps.agentIcon} alt="Agent" width={35} height={35} />
+                        {ps.agentIcon ? <Image src={ps.agentIcon} alt="Agent" width={35} height={35} /> : <span className="text-slate-400">—</span>}
+                      </td>
+                      <td className="px-3 py-2">{map}</td>
+                      <td className="px-3 py-2">{mode}</td>
+                      <td className="px-3 py-2">
+                        {rankIcon ? <Image src={rankIcon} alt="Rank" width={30} height={30} /> : <span className="text-slate-400">—</span>}
+                      </td>
+                      <td className="px-3 py-2">{score}</td>
+                      <td className="px-3 py-2">{result}</td>
+                      <td className="px-3 py-2">{started}</td>
+                      <td className="px-3 py-2">{ps.kills ?? 0}/{ps.deaths ?? 0}/{ps.assists ?? 0}</td>
+                      <td className="px-3 py-2">{acs}</td>
+                      <td className="px-3 py-2">{hsPercentage}</td>
+                      <td className="px-3 py-2">{adr}</td>
+                    </tr>
+                  );
+                })} */}
+
+                {dbRows.map((r, i) => {
+                  const rr = r.roundsRed ?? 0;
+                  const rb = r.roundsBlue ?? 0;
+                  const totalRounds = rr + rb;
+
+                  const acs = totalRounds > 0 && r.score != null ? Math.round(r.score / totalRounds) : 0;
+                  const adr = totalRounds > 0 && r.damage != null ? Math.round(r.damage / totalRounds) : 0;
+
+                  const shots = (r.headshots ?? 0) + (r.bodyshots ?? 0) + (r.legshots ?? 0);
+                  const hsPercentage = shots > 0 ? Math.round(((r.headshots ?? 0) / shots) * 100) : 0;
+
+                  const team = r.team?.toLowerCase() === "blue" ? "blue" : "red";
+                  const scoreStr = team !== "blue" ? `${rr}–${rb}` : `${rb}–${rr}`;
+
+                  const result =
+                    r.roundsRed == null || r.roundsBlue == null
+                      ? "-"
+                      : rr === rb
+                      ? "D"
+                      : team === "red"
+                      ? rr > rb
+                        ? "W"
+                        : "L"
+                      : rb > rr
+                      ? "W"
+                      : "L";
+
+                  const started = r.startedAt ? date_format.format(new Date(r.startedAt)) : "Date Unavailable";
+                  const rankIcon = eloMap.get(r.matchId)?.images?.small;
+
+                  return (
+                    <tr key={r.matchId ?? `m-${i}`} className="border-t">
+                      <td className="px-3 py-2">
+                        {r.agentIcon ? (
+                          <Image src={r.agentIcon} alt="Agent" width={35} height={35} />
                         ) : (
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2">{map}</td>
-                      <td className="px-3 py-2">{mode}</td>
+
+                      <td className="px-3 py-2">{r.map ?? "-"}</td>
+                      <td className="px-3 py-2">{r.mode ?? "-"}</td>
+
                       <td className="px-3 py-2">
                         {rankIcon ? (
                           <Image src={rankIcon} alt="Rank" width={30} height={30} />
@@ -350,12 +506,15 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="px-3 py-2">{score}</td>
+
+                      <td className="px-3 py-2">{scoreStr}</td>
                       <td className="px-3 py-2">{result}</td>
                       <td className="px-3 py-2">{started}</td>
+
                       <td className="px-3 py-2">
-                        {ps.kills ?? 0}/{ps.deaths ?? 0}/{ps.assists ?? 0}
+                        {(r.kills ?? 0)}/{(r.deaths ?? 0)}/{(r.assists ?? 0)}
                       </td>
+
                       <td className="px-3 py-2">{acs}</td>
                       <td className="px-3 py-2">{hsPercentage}</td>
                       <td className="px-3 py-2">{adr}</td>
@@ -363,7 +522,14 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
                   );
                 })}
 
-                {matches.length === 0 && !apiError && (
+                {/* {matches.length === 0 && !apiError && (
+                  <tr>
+                    <td className="px-3 py-6 text-gray-500" colSpan={11}>
+                      No matches found.
+                    </td>
+                  </tr>
+                )} */}
+                {dbRows.length === 0 && !apiError && (
                   <tr>
                     <td className="px-3 py-6 text-gray-500" colSpan={11}>
                       No matches found.
