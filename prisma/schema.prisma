@@ -13,3 +13,44 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+
+model Player {
+  id    String @id @default(cuid())
+  name  String
+  tag   String
+
+  matches PlayerMatch[]
+
+  @@unique([name, tag])
+}
+
+model Match {
+  id        String   @id
+  map       String?
+  mode      String?
+  region    String?
+  startedAt DateTime?
+
+  players   PlayerMatch[]
+}
+
+model PlayerMatch {
+  id       String @id @default(cuid())
+
+  matchId  String
+  playerId String
+
+  team     String?
+  kills    Int?
+  deaths   Int?
+  assists  Int?
+  score    Int?
+
+  match    Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, playerId])
+  @@index([playerId])
+  @@index([matchId])
+}
