@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-type HenrikMatchFull = any; // keep it simple for now
+type HenrikMatchFull = any;
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -11,11 +11,33 @@ export async function POST(req: NextRequest) {
   const name = (searchParams.get("name") ?? "").trim();
   const tag = (searchParams.get("tag") ?? "").trim();
 
+  const size = Math.min(parseInt(searchParams.get("size") ?? "10", 10) || 10, 25);
+
   if (!name || !tag) {
     return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
   }
 
-  // Call YOUR existing matches route (already sets auth + no-store)
+  const COOLDOWN_MS = 5*60_000; 
+
+  const existingByNameTag = await prisma.player.findUnique({
+    where: { name_tag: { name, tag } },
+    select: { id: true, puuid: true, lastSyncedAt: true },
+  });
+
+  if (existingByNameTag?.lastSyncedAt) {
+    const ageMs = Date.now() - new Date(existingByNameTag.lastSyncedAt).getTime();
+    if (ageMs < COOLDOWN_MS) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        reason: "synced recently",
+        player: `${name}#${tag}`,
+        lastSyncedAt: existingByNameTag.lastSyncedAt,
+        cooldownMs: COOLDOWN_MS,
+      });
+    }
+  }
+
   const base =
     process.env.NEXT_PUBLIC_BASE_URL ??
     (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
@@ -24,7 +46,7 @@ export async function POST(req: NextRequest) {
     region,
     name,
     tag,
-    size: "10",
+    size: String(size),
     mode: "competitive",
   });
 
@@ -42,7 +64,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ message: "No matches found" });
   }
 
-  // Resolve player in first match
   const first = matches[0];
   const playerData =
     first?.players?.all_players?.find(
@@ -55,11 +76,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Could not resolve player puuid" }, { status: 500 });
   }
 
-  // Upsert Player
+  const puuid = playerData.puuid as string;
+
   const player = await prisma.player.upsert({
-    where: { puuid: playerData.puuid },
+    where: { puuid },
     update: { name, tag },
-    create: { puuid: playerData.puuid, name, tag },
+    create: { puuid, name, tag },
   });
 
   let matchesUpserted = 0;
@@ -92,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     matchesUpserted++;
 
-    const p = m?.players?.all_players?.find((x: any) => x?.puuid === playerData.puuid);
+    const p = m?.players?.all_players?.find((x: any) => x?.puuid === puuid);
     if (!p) continue;
 
     await prisma.playerMatch.upsert({
@@ -133,9 +155,16 @@ export async function POST(req: NextRequest) {
     playerMatchesUpserted++;
   }
 
+  await prisma.player.update({
+    where: { id: player.id },
+    data: { lastSyncedAt: new Date() },
+  });
+
   return NextResponse.json({
     ok: true,
+    skipped: false,
     player: `${name}#${tag}`,
+    size,
     matchesUpserted,
     playerMatchesUpserted,
   });
