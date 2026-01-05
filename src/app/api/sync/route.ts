@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invalidatePlayerMatches } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
   }
 
-  const COOLDOWN_MS = 5*60_000; 
+  const COOLDOWN_MS = 5 * 60_000;
 
   const existingByNameTag = await prisma.player.findUnique({
     where: { name_tag: { name, tag } },
@@ -159,6 +160,12 @@ export async function POST(req: NextRequest) {
     where: { id: player.id },
     data: { lastSyncedAt: new Date() },
   });
+
+  try {
+    await invalidatePlayerMatches(name, tag);
+  } catch (e) {
+    console.warn("[redis] invalidatePlayerMatches failed:", e);
+  }
 
   return NextResponse.json({
     ok: true,
