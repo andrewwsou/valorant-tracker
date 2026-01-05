@@ -1,0 +1,25 @@
+name: Nightly Sync
+
+on:
+  schedule:
+    - cron: "20 8 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      - run: npx tsx scripts/nightly-sync.ts
+        env:
+          BASE_URL: ${{ secrets.BASE_URL }}
+          SYNC_PLAYERS: ${{ secrets.SYNC_PLAYERS }}
+          SYNC_REGION: na
+          SYNC_SIZE: "10"
