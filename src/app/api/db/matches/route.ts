@@ -1,17 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { cacheGetJson, cacheSetJson } from "@/lib/redis";
+import { nowMs, msSince } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
+function headers(t0: number, cache: "HIT" | "MISS") {
+  return {
+    "x-cache": cache,
+    "x-response-ms": String(msSince(t0)),
+    "cache-control": "no-store",
+  };
+}
+
 export async function GET(req: NextRequest) {
+  const t0 = nowMs();
+
   const { searchParams } = new URL(req.url);
   const name = (searchParams.get("name") ?? "").trim();
   const tag = (searchParams.get("tag") ?? "").trim();
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "10", 10) || 10, 25);
 
   if (!name || !tag) {
-    return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing name or tag" },
+      { status: 400, headers: headers(t0, "MISS") }
+    );
   }
 
   const key = `dbmatches:v2:${name.toLowerCase()}:${tag.toLowerCase()}:limit=${limit}`;
@@ -21,12 +35,10 @@ export async function GET(req: NextRequest) {
     if (cached) {
       return NextResponse.json(
         { cache: "HIT", ...cached },
-        { headers: { "x-cache": "HIT", "cache-control": "no-store" } }
+        { headers: headers(t0, "HIT") }
       );
     }
-  } catch (e) {
-    console.warn("[redis] cache get failed:", e);
-  }
+  } catch {}
 
   const player = await prisma.player.findUnique({
     where: { name_tag: { name, tag } },
@@ -38,13 +50,11 @@ export async function GET(req: NextRequest) {
 
     try {
       await cacheSetJson(key, payload, 15);
-    } catch (e) {
-      console.warn("[redis] cache set failed:", e);
-    }
+    } catch {}
 
     return NextResponse.json(
       { cache: "MISS", ...payload },
-      { headers: { "x-cache": "MISS", "cache-control": "no-store" } }
+      { headers: headers(t0, "MISS") }
     );
   }
 
@@ -63,7 +73,6 @@ export async function GET(req: NextRequest) {
     startedAt: pm.match.startedAt ? pm.match.startedAt.toISOString() : null,
     roundsRed: pm.match.roundsRed,
     roundsBlue: pm.match.roundsBlue,
-
     team: pm.team,
     kills: pm.kills,
     deaths: pm.deaths,
@@ -80,12 +89,10 @@ export async function GET(req: NextRequest) {
 
   try {
     await cacheSetJson(key, payload, 60);
-  } catch (e) {
-    console.warn("[redis] cache set failed:", e);
-  }
+  } catch {}
 
   return NextResponse.json(
     { cache: "MISS", ...payload },
-    { headers: { "x-cache": "MISS", "cache-control": "no-store" } }
+    { headers: headers(t0, "MISS") }
   );
 }
