@@ -254,6 +254,48 @@ function winrateFromDb(rows: DbRow[]): { wins: number; losses: number; draws: nu
   return { wins, losses, draws, winrate };
 }
 
+function computeTrackerScoreLastN(rows: DbRow[], n = 10): number {
+  const slice = rows.slice(0, n);
+  if (slice.length === 0) return 0;
+
+  let sum = 0;
+
+  for (const r of slice) {
+    const rr = r.roundsRed ?? 0;
+    const rb = r.roundsBlue ?? 0;
+
+    const team = (r.team ?? "").toLowerCase();
+    const teamIsRed = team === "red";
+    const teamIsBlue = team === "blue";
+
+    let win = 0;
+    if (rr !== rb && (teamIsRed || teamIsBlue)) {
+      const redWon = rr > rb;
+      const weWon = teamIsRed ? redWon : !redWon;
+      win = weWon ? 1 : 0;
+    }
+
+    const kills = r.kills ?? 0;
+    const deaths = r.deaths ?? 0;
+
+    const kd = kills / Math.max(1, deaths);
+    const kdNorm = kd / (kd + 1);
+
+    const rounds = rr + rb;
+    const acs = rounds > 0 && r.score != null ? r.score / rounds : 0;
+    const acsNorm = acs / (acs + 200);
+
+    const perf = 0.7 * kdNorm + 0.3 * acsNorm;
+    const perfAdj = perf * (win ? 1.0 : 0.85);
+
+    const impact = 0.6 * win + 0.4 * perfAdj;
+    sum += impact;
+  }
+
+  const avg = sum / slice.length;
+  return Math.max(0, Math.min(100, Math.round(avg * 100)));
+}
+
 export default async function PlayerPage({ params }: { params: ParamsP }) {
   const { name: rawName, tag: rawTag } = await params;
   const name = decodeURIComponent(rawName);
@@ -345,7 +387,6 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const eloMap = new Map<string, EloData>();
   for (const e of elo) if (e.match_id) eloMap.set(e.match_id, e);
 
-
   // const targets: Array<PlayerLite | undefined> = matches.map((m) => findPlayer(m, who));
   // const kd = computeKD(targets);
   // const overallACS = computeACSADR(matches, targets).ACS;
@@ -364,6 +405,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const overallACS = computeACSADRFromDb(dbRows).ACS;
   const overallADR = computeACSADRFromDb(dbRows).ADR;
   const { wins, losses, draws, winrate } = winrateFromDb(dbRows);
+  const trackerScore = computeTrackerScoreLastN(dbRows, 10);
 
   return (
     <main className="mx-auto max-w-7xl p-6 space-y-6">
@@ -387,7 +429,16 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
 
         <div className="lg:col-span-9">
           <p className="py-2">Overall Stats</p>
-          <OverallStats wins={wins} losses={losses} draws={draws} winrate={winrate} kd={kd} acs={overallACS} adr={overallADR} />
+          <OverallStats
+            wins={wins}
+            losses={losses}
+            draws={draws}
+            winrate={winrate}
+            kd={kd}
+            acs={overallACS}
+            adr={overallADR}
+            trackerScore={trackerScore}
+          />
 
           <h3 className="mb-2 text-lg font-medium text-slate-100">Recent Matches</h3>
           <div className="overflow-x-auto rounded border border-slate-700">

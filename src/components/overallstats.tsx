@@ -6,6 +6,7 @@ type Props = {
   kd?: string;
   acs?: number;
   adr?: number;
+  trackerScore?: number;
 };
 
 function Stat({
@@ -31,7 +32,7 @@ function Stat({
   );
 }
 
-export default function OverallStats({ wins, losses, draws, winrate, kd, acs, adr }: Props) {
+export default function OverallStats({ wins, losses, draws, winrate, kd, acs, adr, trackerScore }: Props) {
 
   return (
     <section className="relative overflow-hidden rounded-2xl border border-slate-700 bg-slate-800 p-5 text-slate-200">
@@ -43,6 +44,7 @@ export default function OverallStats({ wins, losses, draws, winrate, kd, acs, ad
         <Stat label="KD" value={kd} accent/>
         <Stat label="ACS" value={acs} />
         <Stat label="ADR" value={adr} />
+        <Stat label="Tracker Score" value={trackerScore} />
       </div>
     </section>
   );
