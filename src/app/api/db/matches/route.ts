@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -13,13 +14,38 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
   }
 
+  const key = `dbmatches:v2:${name.toLowerCase()}:${tag.toLowerCase()}:limit=${limit}`;
+
+  try {
+    const cached = await cacheGetJson<any>(key);
+    if (cached) {
+      return NextResponse.json(
+        { cache: "HIT", ...cached },
+        { headers: { "x-cache": "HIT", "cache-control": "no-store" } }
+      );
+    }
+  } catch (e) {
+    console.warn("[redis] cache get failed:", e);
+  }
+
   const player = await prisma.player.findUnique({
     where: { name_tag: { name, tag } },
     select: { id: true, name: true, tag: true, puuid: true },
   });
 
   if (!player) {
-    return NextResponse.json({ data: [], message: "Player not found in DB. Run /api/sync first." });
+    const payload = { player: null, data: [], message: "Player not found in DB. Run /api/sync first." };
+
+    try {
+      await cacheSetJson(key, payload, 15);
+    } catch (e) {
+      console.warn("[redis] cache set failed:", e);
+    }
+
+    return NextResponse.json(
+      { cache: "MISS", ...payload },
+      { headers: { "x-cache": "MISS", "cache-control": "no-store" } }
+    );
   }
 
   const rows = await prisma.playerMatch.findMany({
@@ -50,5 +76,16 @@ export async function GET(req: NextRequest) {
     agentIcon: pm.agentIcon,
   }));
 
-  return NextResponse.json({ player, data });
+  const payload = { player, data };
+
+  try {
+    await cacheSetJson(key, payload, 60);
+  } catch (e) {
+    console.warn("[redis] cache set failed:", e);
+  }
+
+  return NextResponse.json(
+    { cache: "MISS", ...payload },
+    { headers: { "x-cache": "MISS", "cache-control": "no-store" } }
+  );
 }
