@@ -1,0 +1,9 @@
+# Tells Grafana to load every dashboard JSON file in the mounted folder.
+apiVersion: 1
+providers:
+  - name: stattrack
+    folder: VALORANT StatTrack
+    type: file
+    disableDeletion: true
+    options:
+      path: /otel-lgtm/grafana/conf/provisioning/dashboards/stattrack

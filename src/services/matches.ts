@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { cacheDelete, cacheGetJson, cacheSetJson } from "@/lib/redis";
+import { cacheLookups, withSpan } from "@/lib/telemetry";
 
 /** One player's line from one match: the read model behind the match table and all stats. */
 export type MatchRow = {
@@ -52,62 +53,72 @@ export async function getRecentMatches(
   tag: string,
   limit: number,
 ): Promise<RecentMatches & { cache: "HIT" | "MISS" }> {
-  const key = recentMatchesKey(name, tag, limit);
+  return withSpan("matches.recent", { "matches.limit": limit }, async (span) => {
+    const key = recentMatchesKey(name, tag, limit);
 
-  try {
-    const cached = await cacheGetJson<RecentMatches>(key);
-    if (cached) return { cache: "HIT", ...cached };
-  } catch {
-    // Fall through to the database.
-  }
-
-  const player = await prisma.player.findUnique({
-    where: { name_tag: { name, tag } },
-    select: { id: true, name: true, tag: true, puuid: true },
-  });
-
-  if (!player) {
-    const payload: RecentMatches = {
-      player: null,
-      data: [],
-      message: "Player not found in DB. Run /api/sync first.",
-    };
     try {
-      await cacheSetJson(key, payload, NOT_FOUND_TTL_SECONDS);
+      const cached = await cacheGetJson<RecentMatches>(key);
+      if (cached) {
+        span.setAttributes({ "cache.hit": true, "matches.count": cached.data.length });
+        cacheLookups.add(1, { resource: "recent-matches", result: "hit" });
+        return { cache: "HIT" as const, ...cached };
+      }
+      cacheLookups.add(1, { resource: "recent-matches", result: "miss" });
+    } catch {
+      // Cache trouble never blocks a read: fall through to the database.
+      cacheLookups.add(1, { resource: "recent-matches", result: "error" });
+    }
+    span.setAttribute("cache.hit", false);
+
+    const player = await prisma.player.findUnique({
+      where: { name_tag: { name, tag } },
+      select: { id: true, name: true, tag: true, puuid: true },
+    });
+
+    if (!player) {
+      const payload: RecentMatches = {
+        player: null,
+        data: [],
+        message: "Player not found in DB. Run /api/sync first.",
+      };
+      try {
+        await cacheSetJson(key, payload, NOT_FOUND_TTL_SECONDS);
+      } catch {}
+      return { cache: "MISS" as const, ...payload };
+    }
+
+    const rows = await prisma.playerMatch.findMany({
+      where: { playerId: player.id },
+      include: { match: true },
+      orderBy: { match: { startedAt: "desc" } },
+      take: limit,
+    });
+
+    const data: MatchRow[] = rows.map((pm) => ({
+      matchId: pm.matchId,
+      map: pm.match.map,
+      mode: pm.match.mode,
+      region: pm.match.region,
+      startedAt: pm.match.startedAt ? pm.match.startedAt.toISOString() : null,
+      roundsRed: pm.match.roundsRed,
+      roundsBlue: pm.match.roundsBlue,
+      team: pm.team,
+      kills: pm.kills,
+      deaths: pm.deaths,
+      assists: pm.assists,
+      score: pm.score,
+      damage: pm.damage,
+      headshots: pm.headshots,
+      bodyshots: pm.bodyshots,
+      legshots: pm.legshots,
+      agentIcon: pm.agentIcon,
+    }));
+
+    span.setAttribute("matches.count", data.length);
+    const payload: RecentMatches = { player, data };
+    try {
+      await cacheSetJson(key, payload, CACHE_TTL_SECONDS);
     } catch {}
-    return { cache: "MISS", ...payload };
-  }
-
-  const rows = await prisma.playerMatch.findMany({
-    where: { playerId: player.id },
-    include: { match: true },
-    orderBy: { match: { startedAt: "desc" } },
-    take: limit,
+    return { cache: "MISS" as const, ...payload };
   });
-
-  const data: MatchRow[] = rows.map((pm) => ({
-    matchId: pm.matchId,
-    map: pm.match.map,
-    mode: pm.match.mode,
-    region: pm.match.region,
-    startedAt: pm.match.startedAt ? pm.match.startedAt.toISOString() : null,
-    roundsRed: pm.match.roundsRed,
-    roundsBlue: pm.match.roundsBlue,
-    team: pm.team,
-    kills: pm.kills,
-    deaths: pm.deaths,
-    assists: pm.assists,
-    score: pm.score,
-    damage: pm.damage,
-    headshots: pm.headshots,
-    bodyshots: pm.bodyshots,
-    legshots: pm.legshots,
-    agentIcon: pm.agentIcon,
-  }));
-
-  const payload: RecentMatches = { player, data };
-  try {
-    await cacheSetJson(key, payload, CACHE_TTL_SECONDS);
-  } catch {}
-  return { cache: "MISS", ...payload };
 }

@@ -13,7 +13,8 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 - **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
 - **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
-- **Tested core logic.** 54 Vitest unit tests cover the stat math, sync, caching, and input parsing, with the database and APIs mocked.
+- **Tested core logic.** 58 Vitest unit tests cover the stat math, sync, caching, tracing, and input parsing, with the database and APIs mocked.
+- **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
 - **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
 - **Nightly sync** through a scheduled GitHub Actions workflow.
@@ -34,6 +35,7 @@ flowchart LR
     client -->|on cache miss| henrik[HenrikDev VALORANT API]
     services -->|cached reads| redis
     services -->|Prisma| postgres[(PostgreSQL)]
+    app -.->|OTLP traces and metrics| lgtm[Grafana, Tempo, Prometheus]
 ```
 
 What happens when someone opens a profile:
@@ -51,9 +53,36 @@ What happens when someone opens a profile:
 | Recent matches from Postgres | 60 seconds | Cleared whenever a sync writes new matches |
 | Raw match details | not cached | About 7 MB per 10 matches, and the fields we need already live in Postgres |
 
+## Observability
+
+The app is instrumented with OpenTelemetry and sends traces and metrics over OTLP, so any compatible backend works. Locally, one command adds Grafana with Tempo for traces and Prometheus for metrics:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+Grafana runs at http://localhost:3001 with the StatTrack dashboard preloaded.
+
+![Grafana dashboard showing profile load time, cache hit ratio, upstream calls, and the rate-limit budget](docs/grafana-dashboard.png)
+
+Below is a trace of a first-time profile view. The card and rank lookups run while the match sync is still going, and the match list loads once the sync finishes:
+
+![Trace waterfall of one profile view in Grafana](docs/trace-waterfall.png)
+
+| Metric | Type | What it shows |
+|---|---|---|
+| `stattrack.profile.duration` | histogram, seconds | Time to load a whole profile |
+| `stattrack.cache.lookups` | counter | Cache hits, misses, and errors by resource |
+| `stattrack.upstream.requests` | counter | HenrikDev calls by endpoint and HTTP status |
+| `stattrack.upstream.duration` | histogram, seconds | HenrikDev latency by endpoint |
+| `stattrack.upstream.ratelimit.remaining` | gauge | Requests left in the API's rate-limit window |
+| `stattrack.sync.runs` | counter | Sync attempts by outcome |
+
+Telemetry stays off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so tests and a plain `npm run dev` pay nothing for it. To use a hosted backend, set that variable and put its credentials in `OTEL_EXPORTER_OTLP_HEADERS`.
+
 ## Tech stack
 
-TypeScript, Next.js 15 (App Router), React 19, Tailwind CSS 4, PostgreSQL 16, Prisma 6, Redis (Upstash), Docker, GitHub Actions.
+TypeScript, Next.js 15 (App Router), React 19, Tailwind CSS 4, PostgreSQL 16, Prisma 6, Redis (Upstash), OpenTelemetry, Grafana, Docker, GitHub Actions.
 
 ## Getting started
 
@@ -96,6 +125,9 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `UPSTASH_REDIS_REST_URL` | yes | Redis REST endpoint: Upstash, or the local proxy |
 | `UPSTASH_REDIS_REST_TOKEN` | yes | Token for that endpoint |
 | `HENRIKDEV_API_KEY` | yes | HenrikDev API key |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Where to send traces and metrics. Telemetry is off when it's unset |
+| `OTEL_EXPORTER_OTLP_HEADERS` | no | Auth headers for a hosted OTLP backend |
+| `OTEL_SERVICE_NAME` | no | Service name on traces and metrics. Defaults to `valorant-stattrack` |
 
 The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed app, and `SYNC_PLAYERS`, a JSON array such as `[{"name":"PlayerName","tag":"NA1"}]`.
 
@@ -119,6 +151,7 @@ src/
   app/
     api/                   route handlers: parse input, call a service
     player/[name]/[tag]/   player profile page
+  instrumentation.ts       starts OpenTelemetry when an endpoint is configured
   components/              UI components
   services/
     profile.ts             loads everything the player page shows
@@ -130,6 +163,8 @@ src/
     redis.ts               cache helpers
     prisma.ts              database client
     riot-id.ts             input parsing and region allowlist
+    telemetry.ts           spans and custom metrics
+observability/             Grafana dashboard and provisioning
 prisma/                    schema and migrations
 scripts/nightly-sync.ts    nightly ingestion job
 ```
@@ -141,7 +176,7 @@ Unit tests sit next to the code they cover, as `*.test.ts`.
 - [x] Unit tests with Vitest
 - [x] CI on every pull request and push to main
 - [ ] End-to-end and load tests
-- [ ] OpenTelemetry traces and metrics
+- [x] OpenTelemetry traces, metrics, and a Grafana dashboard
 - [ ] Leaderboard backed by precomputed aggregates
 - [ ] MCP server so AI agents can query player stats
 - [ ] Retries with backoff and rate-limit handling for upstream calls
