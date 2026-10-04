@@ -14,11 +14,6 @@ export async function cacheSetJson(key: string, value: unknown, ttlSeconds: numb
   await redis.set(key, value, { ex: ttlSeconds });
 }
 
-export async function invalidatePlayerMatches(name: string, tag: string) {
-  const n = name.toLowerCase();
-  const t = tag.toLowerCase();
-  await Promise.all([
-    redis.del(`dbmatches:v2:${n}:${t}:limit=10`),
-    redis.del(`dbmatches:v2:${n}:${t}:limit=25`)
-  ]);
+export async function cacheDelete(...keys: string[]) {
+  if (keys.length > 0) await redis.del(...keys);
 }

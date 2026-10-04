@@ -159,3 +159,22 @@ export type HenrikMatch = {
     blue?: { rounds_won?: number };
   };
 };
+
+/** `data` from the account endpoint. */
+export type HenrikAccount = {
+  card?: { small?: string; large?: string; wide?: string };
+};
+
+/** `data` from the MMR (current rank) endpoint. */
+export type HenrikMmr = {
+  current_data?: { currenttierpatched?: string; images?: { small?: string; large?: string } };
+  highest_rank?: { patched_tier?: string; season?: string };
+};
+
+/** One entry of `data` from the MMR history endpoint. */
+export type HenrikMmrHistoryEntry = {
+  match_id?: string;
+  currenttier_patched?: string;
+  images?: { small?: string; large?: string };
+  mmr_change_to_last_game?: number;
+};
