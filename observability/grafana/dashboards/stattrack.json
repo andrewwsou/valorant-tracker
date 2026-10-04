@@ -734,6 +734,69 @@
         }
       },
       "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Upstream data problems",
+      "description": "Per minute: HenrikDev answers with no readable data, items dropped because they could not be identified, and fields that fell back to null, by field. A sudden rise for one field usually means HenrikDev renamed or changed it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (endpoint, kind) (rate(stattrack_upstream_invalid_payloads_total[$__rate_interval])) * 60",
+          "legendFormat": "unreadable: {{endpoint}} {{kind}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (field, reason) (rate(stattrack_upstream_field_fallbacks_total[$__rate_interval])) * 60",
+          "legendFormat": "fallback: {{field}} ({{reason}})",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12
     }
   ]
 }

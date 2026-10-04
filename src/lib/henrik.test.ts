@@ -7,7 +7,15 @@ vi.mock("@/lib/redis", () => ({
   extendUntil: vi.fn(),
 }));
 
-import { CACHE_TTL_SECONDS, getAccount, getMatches, getMmr, NEGATIVE_TTL_SECONDS } from "@/lib/henrik";
+import {
+  CACHE_TTL_SECONDS,
+  getAccount,
+  getMatches,
+  getMmr,
+  getMmrHistory,
+  NEGATIVE_TTL_SECONDS,
+  rememberUnreadableMatches,
+} from "@/lib/henrik";
 import { resetLimitsForTests } from "@/lib/henrik-limits";
 import { cacheGetJson, cacheSetJson, extendUntil, getUntil } from "@/lib/redis";
 
@@ -134,6 +142,22 @@ describe("cached lookups", () => {
     expect(cacheSetJson).not.toHaveBeenCalled();
   });
 
+  it("caches a 200 without readable data for 30 seconds, not the full hour", async () => {
+    for (const data of [null, [], "text"]) {
+      vi.mocked(cacheSetJson).mockClear();
+      fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data }));
+      await getAccount("odd", "0000");
+      expect(cacheSetJson, JSON.stringify(data)).toHaveBeenCalledWith(expect.any(String), expect.anything(), NEGATIVE_TTL_SECONDS.failure);
+    }
+  });
+
+  it("caches an empty rank history like any other answer", async () => {
+    fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data: [] }));
+
+    await getMmrHistory("na", "new", "0000");
+    expect(cacheSetJson).toHaveBeenCalledWith(expect.any(String), expect.anything(), CACHE_TTL_SECONDS.mmr);
+  });
+
   it("treats a cached value of the wrong shape as a miss", async () => {
     vi.mocked(cacheGetJson).mockResolvedValue({ data: "left by an older version" });
     fetchMock.mockResolvedValue(upstream(200, { data: {} }));
@@ -174,7 +198,7 @@ describe("getMatches", () => {
     await getMatches("na", "enzo", "yyy", { size: 10, mode: "competitive" });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
-      "https://api.henrikdev.xyz/valorant/v3/matches/na/enzo/yyy?size=10&mode=competitive",
+      "https://api.henrikdev.xyz/valorant/v4/matches/na/pc/enzo/yyy?size=10&mode=competitive",
     );
     expect(cacheSetJson).not.toHaveBeenCalled();
   });
@@ -185,8 +209,31 @@ describe("getMatches", () => {
     fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data: [] }));
     await getMatches("na", "Fresh", "0001", { size: 10, mode: "competitive" });
 
-    expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:na:ghost:0000:competitive", expect.anything(), 300);
-    expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:na:fresh:0001:competitive", expect.anything(), 300);
+    expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:v4:pc:na:ghost:0000:competitive", expect.anything(), 300);
+    expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:v4:pc:na:fresh:0001:competitive", expect.anything(), 300);
+  });
+
+  it("remembers an unreadable match list for 30 seconds as a small 502 under the same key", async () => {
+    await rememberUnreadableMatches("na", "Odd", "0000", "competitive");
+
+    const [key, value, ttl] = vi.mocked(cacheSetJson).mock.calls[0];
+    expect(key).toBe("henrik:v1:matches:v4:pc:na:odd:0000:competitive");
+    expect(ttl).toBe(NEGATIVE_TTL_SECONDS.failure);
+    expect(value).toMatchObject({ status: 502, contentType: "application/json" });
+    expect(JSON.parse((value as { body: string }).body).errors[0].details).toEqual({ source: "stattrack", reason: "unreadable" });
+
+    // The next lookup is answered from the cache without calling upstream.
+    vi.mocked(cacheGetJson).mockResolvedValue(value);
+    await expect(getMatches("na", "odd", "0000", { size: 10, mode: "competitive" })).resolves.toMatchObject({ status: 502, cache: "HIT" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("caches a small answer without a readable match list briefly, like a failure", async () => {
+    fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data: null }));
+
+    await getMatches("na", "odd", "0000", { size: 10, mode: "competitive" });
+
+    expect(cacheSetJson).toHaveBeenCalledWith(expect.stringContaining(":odd:"), expect.anything(), NEGATIVE_TTL_SECONDS.failure);
   });
 });
 

@@ -34,6 +34,12 @@ const row: MatchRow = {
 
 const skipped: SyncResult = { status: "skipped", lastSyncedAt: new Date() };
 
+// Real HenrikDev image URLs: only https on media.valorant-api.com reach the page.
+const MEDIA = "https://media.valorant-api.com";
+const CARD = `${MEDIA}/playercards/03f88215-41f1-d3a2-7983-67b56517eb72/smallart.png`;
+const RADIANT = `${MEDIA}/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/27/smallicon.png`;
+const DIAMOND = `${MEDIA}/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/19/smallicon.png`;
+
 function ok(data: unknown) {
   return { status: 200, contentType: "application/json", body: JSON.stringify({ data }), cache: "MISS" as const };
 }
@@ -44,14 +50,14 @@ function failed(status: number) {
 
 beforeEach(() => {
   vi.mocked(syncPlayer).mockResolvedValue(skipped);
-  vi.mocked(getAccount).mockResolvedValue(ok({ card: { small: "card.png" } }));
+  vi.mocked(getAccount).mockResolvedValue(ok({ card: { small: CARD } }));
   vi.mocked(getMmr).mockResolvedValue(
     ok({
-      current_data: { currenttierpatched: "Radiant", images: { small: "radiant.png" } },
+      current_data: { currenttierpatched: "Radiant", images: { small: RADIANT } },
       highest_rank: { patched_tier: "Radiant" },
     }),
   );
-  vi.mocked(getMmrHistory).mockResolvedValue(ok([{ match_id: "m1", images: { small: "rank-after-m1.png" } }]));
+  vi.mocked(getMmrHistory).mockResolvedValue(ok([{ match_id: "m1", images: { small: DIAMOND } }]));
   vi.mocked(getRecentMatches).mockResolvedValue({ cache: "MISS", player: null, data: [row] });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -61,12 +67,64 @@ describe("getPlayerProfile", () => {
     const profile = await getPlayerProfile(id);
 
     expect(profile).toMatchObject({
-      cardImage: "card.png",
-      rank: { current: "Radiant", icon: "radiant.png", peak: "Radiant" },
+      cardImage: CARD,
+      rank: { current: "Radiant", icon: RADIANT, peak: "Radiant" },
       matches: [row],
       errors: [],
     });
-    expect(profile.rankIconByMatch.get("m1")).toBe("rank-after-m1.png");
+    expect(profile.rankIconByMatch.get("m1")).toBe(DIAMOND);
+  });
+
+  it("drops an image from a host the page can't load, keeping everything else", async () => {
+    vi.mocked(getAccount).mockResolvedValue(ok({ card: { small: "https://evil.example/card.png" } }));
+
+    const profile = await getPlayerProfile(id);
+
+    expect(profile.cardImage).toBeNull();
+    expect(profile.rank.icon).toBe(RADIANT);
+    expect(profile.errors).toEqual([]);
+  });
+
+  it("says it couldn't read a part whose answer has no usable data", async () => {
+    vi.mocked(getAccount).mockResolvedValue(ok(null));
+    vi.mocked(getMmrHistory).mockResolvedValue(ok({ not: "a list" }));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const profile = await getPlayerProfile(id);
+
+    expect(profile.errors).toEqual(["Couldn't read player card", "Couldn't read rank history"]);
+    expect(profile.rank.current).toBe("Radiant");
+  });
+
+  it("reports validation only for fresh answers, not for every view of a cached one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const history = ok([{ images: { small: RADIANT } }, { match_id: "m1", images: { small: DIAMOND } }]);
+
+    vi.mocked(getMmrHistory).mockResolvedValue({ ...history, cache: "HIT" });
+    await getPlayerProfile(id);
+    expect(warn).not.toHaveBeenCalled();
+
+    vi.mocked(getMmrHistory).mockResolvedValue(history);
+    await getPlayerProfile(id);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("mmr-history: dropped 1 of 2 items"));
+  });
+
+  it("skips a rank history entry without a match ID", async () => {
+    vi.mocked(getMmrHistory).mockResolvedValue(ok([{ images: { small: RADIANT } }, { match_id: "m1", images: { small: DIAMOND } }]));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const profile = await getPlayerProfile(id);
+
+    expect([...profile.rankIconByMatch]).toEqual([["m1", DIAMOND]]);
+  });
+
+  it("reports a match list it couldn't read, and still shows stored matches", async () => {
+    vi.mocked(syncPlayer).mockResolvedValue({ status: "invalid-payload" });
+
+    const profile = await getPlayerProfile(id);
+
+    expect(profile.errors).toEqual(["Couldn't read recent matches"]);
+    expect(profile.matches).toEqual([row]);
   });
 
   it("starts the upstream lookups without waiting for the sync", async () => {

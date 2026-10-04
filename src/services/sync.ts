@@ -1,5 +1,6 @@
 import { Prisma } from "@/generated/prisma";
-import { getMatches, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik";
+import { getMatches, rememberUnreadableMatches } from "@/lib/henrik";
+import { MatchV4, parseListBody, reportValidation, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik-schemas";
 import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
 import { syncRuns, withSpan } from "@/lib/telemetry";
@@ -14,54 +15,62 @@ export type SyncResult =
   | { status: "synced"; matchesUpserted: number; playerMatchesUpserted: number }
   | { status: "no-matches" }
   | { status: "player-not-in-matches" }
+  /** HenrikDev answered, but no match in the answer could be read. Nothing was written. */
+  | { status: "invalid-payload" }
   | { status: "upstream-error"; httpStatus: number; contentType: string; body: string; retryAfterSeconds?: number };
 
 /** Finds a player in a match by Riot ID. Riot IDs ignore case. */
 export function findPlayerByRiotId(match: HenrikMatch, name: string, tag: string): HenrikPlayer | undefined {
-  return match.players?.all_players?.find(
-    (p) =>
-      (p.name ?? "").toLowerCase() === name.toLowerCase() &&
-      (p.tag ?? "").toLowerCase() === tag.toLowerCase(),
+  return match.players.find(
+    (p) => (p.name ?? "").toLowerCase() === name.toLowerCase() && (p.tag ?? "").toLowerCase() === tag.toLowerCase(),
   );
 }
 
 /**
- * Upstream data is untrusted, and the batch writes one statement for all rows:
- * a single value of the wrong type would fail the whole sync. So anything that
- * isn't what the column holds becomes null instead. Payload validation comes later.
+ * An agent's icon, built from its ID. v4 sends only the ID; v3 sent this exact
+ * URL (checked against real responses), so stored rows don't change.
  */
-const INT_MAX = 2_147_483_647;
-const int = (v: unknown) =>
-  typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= INT_MAX ? Math.trunc(v) : null;
-const text = (v: unknown) => (typeof v === "string" ? v : null);
+export function agentIconUrl(agentId: string | null): string | null {
+  return agentId ? `https://media.valorant-api.com/agents/${agentId}/displayicon.png` : null;
+}
 
-/** The `Match` columns stored for one upstream match. */
+/** Rounds a side won. Teams are matched by name, ignoring case. */
+function roundsWon(match: HenrikMatch, side: "red" | "blue"): number | null {
+  return match.teams.find((t) => t.team_id.toLowerCase() === side)?.rounds?.won ?? null;
+}
+
+/**
+ * The `Match` columns stored for one validated match. Values were already
+ * checked by the schema: anything of the wrong type is null by now.
+ */
 export function toMatchRecord(match: HenrikMatch, region: string) {
-  const start = match.metadata?.game_start;
-  const startedAt = typeof start === "number" && start > 0 ? new Date(start * 1000) : null;
+  const { map, queue, started_at } = match.metadata;
   return {
-    map: text(match.metadata?.map),
-    mode: text(match.metadata?.mode),
+    map: map?.name ?? null,
+    // The spec lets queue.name be null; the queue id still says what it was.
+    mode: queue?.name ?? (queue?.id === "competitive" ? "Competitive" : null),
     region,
-    startedAt: startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : null,
-    roundsRed: int(match.teams?.red?.rounds_won),
-    roundsBlue: int(match.teams?.blue?.rounds_won),
+    // Whole seconds, like v3's game_start, so re-synced rows don't change.
+    startedAt: started_at === null ? null : new Date(Math.floor(started_at / 1000) * 1000),
+    roundsRed: roundsWon(match, "red"),
+    roundsBlue: roundsWon(match, "blue"),
   };
 }
 
 /** The `PlayerMatch` columns stored for one player in one match. */
 export function toPlayerMatchRecord(player: HenrikPlayer) {
+  const stats = player.stats;
   return {
-    team: text(player.team)?.toLowerCase() ?? null,
-    kills: int(player.stats?.kills),
-    deaths: int(player.stats?.deaths),
-    assists: int(player.stats?.assists),
-    score: int(player.stats?.score),
-    damage: int(player.damage_made),
-    headshots: int(player.stats?.headshots),
-    bodyshots: int(player.stats?.bodyshots),
-    legshots: int(player.stats?.legshots),
-    agentIcon: text(player.assets?.agent?.small),
+    team: player.team_id?.toLowerCase() ?? null,
+    kills: stats?.kills ?? null,
+    deaths: stats?.deaths ?? null,
+    assists: stats?.assists ?? null,
+    score: stats?.score ?? null,
+    damage: stats?.damage?.dealt ?? null,
+    headshots: stats?.headshots ?? null,
+    bodyshots: stats?.bodyshots ?? null,
+    legshots: stats?.legshots ?? null,
+    agentIcon: agentIconUrl(player.agent?.id ?? null),
   };
 }
 
@@ -155,7 +164,8 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
     return { status: "skipped", lastSyncedAt: existing.lastSyncedAt };
   }
 
-  const upstream = await getMatches(region, name, tag, { size, mode: "competitive" });
+  const mode = "competitive";
+  const upstream = await getMatches(region, name, tag, { size, mode });
   if (upstream.status < 200 || upstream.status >= 300) {
     return {
       status: "upstream-error",
@@ -166,11 +176,19 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
     };
   }
 
-  const json = JSON.parse(upstream.body) as { data?: unknown };
-  const matches = Array.isArray(json?.data) ? (json.data as HenrikMatch[]) : [];
+  // Each match is checked on its own: a bad one is skipped and counted, the rest are kept.
+  const { items: matches, report } = parseListBody("matches", upstream.body, MatchV4);
+  // Only fresh answers count in the metrics, not every view of a cached one.
+  if (upstream.cache === "MISS") reportValidation(report);
+  if (matches === null || (matches.length === 0 && report.rejected > 0)) {
+    // Nothing usable: don't download the same megabytes again on the next view.
+    if (upstream.cache === "MISS") await rememberUnreadableMatches(region, name, tag, mode);
+    return { status: "invalid-payload" };
+  }
   if (matches.length === 0) return { status: "no-matches" };
 
-  const puuid = findPlayerByRiotId(matches[0], name, tag)?.puuid;
+  // From the first match that has the player, in case an earlier one lost its player list.
+  const puuid = matches.map((m) => findPlayerByRiotId(m, name, tag)).find(Boolean)?.puuid;
   if (!puuid) return { status: "player-not-in-matches" };
 
   const player = await prisma.player.upsert({
@@ -182,10 +200,9 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
   const matchRows: MatchUpsert[] = [];
   const lineRows: PlayerMatchUpsert[] = [];
   for (const m of matches) {
-    const matchId = m.metadata?.matchid;
-    if (typeof matchId !== "string" || !matchId) continue;
+    const matchId = m.metadata.match_id;
     matchRows.push({ id: matchId, ...toMatchRecord(m, region) });
-    const p = m.players?.all_players?.find((x) => x.puuid === puuid);
+    const p = m.players.find((x) => x.puuid === puuid);
     if (p) lineRows.push({ matchId, ...toPlayerMatchRecord(p) });
   }
 

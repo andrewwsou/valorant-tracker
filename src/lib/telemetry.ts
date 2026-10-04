@@ -34,6 +34,14 @@ export const upstreamShortCircuits = meter.createCounter("stattrack.upstream.sho
   description: "Lookups answered locally during a cooldown instead of calling the HenrikDev API, by endpoint and reason.",
 });
 
+export const upstreamInvalidPayloads = meter.createCounter("stattrack.upstream.invalid_payloads", {
+  description: "HenrikDev responses or items that failed validation, by endpoint and kind (envelope or item).",
+});
+
+export const upstreamFieldFallbacks = meter.createCounter("stattrack.upstream.field_fallbacks", {
+  description: "Fields that were missing, null, or the wrong type and fell back to null, by endpoint, field, and reason.",
+});
+
 export const upstreamCooldowns = meter.createCounter("stattrack.upstream.cooldowns", {
   description: "Cooldowns started, by trigger (429, remaining_zero, retry_after, or breaker).",
 });

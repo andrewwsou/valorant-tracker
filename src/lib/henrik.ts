@@ -75,9 +75,10 @@ type Policy = {
 const SMALL: Policy = { attemptMs: 3_000, deadlineMs: 7_000, minRetryMs: 1_000, retryAfterTimeout: true };
 
 /**
- * Timeouts per endpoint. Matches responses are about 7 MB, so they get longer,
- * and a timeout there is never retried: the first try was probably already
- * charged against the rate limit, and a second download wouldn't fit anyway.
+ * Timeouts per endpoint. Match lists are megabytes (2 MB for 5 matches from v4),
+ * so they get longer, and a timeout there is never retried: the first try was
+ * probably already charged against the rate limit, and a second download
+ * wouldn't fit anyway.
  */
 const POLICY: Record<Endpoint, Policy> = {
   account: SMALL,
@@ -312,16 +313,25 @@ function shortCircuit(cooldown: Cooldown, nowMs: number): UpstreamResponse {
     : localError(503, "outage_cooldown", `HenrikDev looks unavailable. Try again in ${seconds}s.`, seconds);
 }
 
-/** True for a small `{"data":[]}`-style body: a player with no matches in this mode. */
-function hasEmptyData(body: string): boolean {
-  if (body.length > 512) return false;
+/** What `data` holds in a response body: a full array, an empty one, an object, or something unusable. */
+function dataKind(body: string): "array" | "empty" | "object" | null {
   try {
-    const data = (JSON.parse(body) as { data?: unknown }).data;
-    return Array.isArray(data) && data.length === 0;
+    const data = (JSON.parse(body) as { data?: unknown } | null)?.data;
+    if (Array.isArray(data)) return data.length > 0 ? "array" : "empty";
+    if (typeof data === "object" && data !== null) return "object";
   } catch {
-    return false;
+    // Not JSON.
   }
+  return null;
 }
+
+/** The shape of `data` each endpoint should send. Callers validate the fields; this only decides caching. */
+const EXPECTED_DATA: Record<Endpoint, "object" | "array"> = {
+  account: "object",
+  mmr: "object",
+  "mmr-history": "array",
+  matches: "array",
+};
 
 /** How long to cache a result, in seconds, or null to not cache it. */
 function ttlFor(endpoint: Endpoint, res: UpstreamResponse, outcome: Outcome, okTtlSeconds: number | null): number | null {
@@ -329,10 +339,18 @@ function ttlFor(endpoint: Endpoint, res: UpstreamResponse, outcome: Outcome, okT
   // keeps calls away; a cached copy would outlive the wait and lose its Retry-After.
   if (res.retryAfterSeconds) return null;
   switch (outcome) {
-    case "ok":
+    case "ok": {
       if (res.status !== 200) return null;
-      if (okTtlSeconds !== null) return okTtlSeconds;
-      return endpoint === "matches" && hasEmptyData(res.body) ? NEGATIVE_TTL_SECONDS.notFound : null;
+      // Real match lists are megabytes: never parsed here, never cached.
+      if (okTtlSeconds === null && res.body.length > 512) return null;
+      const kind = dataKind(res.body);
+      // For a list endpoint, an empty list is a real answer: no matches yet counts like
+      // not found, and an empty rank history is cached like any other.
+      if (kind === "empty" && EXPECTED_DATA[endpoint] === "array") return okTtlSeconds ?? NEGATIVE_TTL_SECONDS.notFound;
+      // A 200 without readable data is cached like a failure: briefly, never for the full TTL.
+      if (kind !== EXPECTED_DATA[endpoint]) return NEGATIVE_TTL_SECONDS.failure;
+      return okTtlSeconds;
+    }
     case "not_found":
       return NEGATIVE_TTL_SECONDS.notFound;
     case "upstream_error":
@@ -466,10 +484,14 @@ export function getMmrHistory(region: Region, name: string, tag: string) {
   );
 }
 
+/** The only platform the app tracks. v4 endpoints split PC and console players. */
+const PLATFORM = "pc";
+
 /**
- * Full match details for recent games. Successful responses aren't cached: the
- * payload is several megabytes, and the sync job stores what we need in
- * Postgres anyway. Failures and empty histories are, like every other lookup.
+ * Full match details for recent games, from v4 (about half the size of v3, and
+ * the same match IDs and values; see LEARNING_LOG.md). Successful responses
+ * aren't cached: the payload is megabytes, and the sync job stores what we need
+ * in Postgres anyway. Failures and empty histories are, like every other lookup.
  */
 export function getMatches(
   region: Region,
@@ -480,65 +502,28 @@ export function getMatches(
   const qs = new URLSearchParams({ size: String(opts.size), mode: opts.mode });
   return cachedRequest(
     "matches",
-    `/v3/matches/${region}/${enc(name)}/${enc(tag)}?${qs}`,
-    cacheKey("matches", region, name, tag, opts.mode),
+    `/v4/matches/${region}/${PLATFORM}/${enc(name)}/${enc(tag)}?${qs}`,
+    matchesKey(region, name, tag, opts.mode),
     null,
   );
 }
 
-/* ------------------------------------------------------------------------ */
-/* Response types. Every field is optional because the API is third-party   */
-/* and unofficial: code must handle missing fields instead of trusting them. */
-/* ------------------------------------------------------------------------ */
+/** "v4" is in the key, so an empty list cached from v3 can't hide v4's answer. */
+function matchesKey(region: Region, name: string, tag: string, mode: string) {
+  return cacheKey("matches", "v4", PLATFORM, region, name, tag, mode);
+}
 
-export type HenrikPlayer = {
-  puuid?: string;
-  name?: string;
-  tag?: string;
-  team?: string;
-  damage_made?: number;
-  stats?: {
-    kills?: number;
-    deaths?: number;
-    assists?: number;
-    score?: number;
-    headshots?: number;
-    bodyshots?: number;
-    legshots?: number;
-  };
-  assets?: { agent?: { small?: string } };
-};
-
-export type HenrikMatch = {
-  metadata?: {
-    matchid?: string;
-    map?: string;
-    mode?: string;
-    /** Unix timestamp in seconds. */
-    game_start?: number;
-  };
-  players?: { all_players?: HenrikPlayer[] };
-  teams?: {
-    red?: { rounds_won?: number };
-    blue?: { rounds_won?: number };
-  };
-};
-
-/** `data` from the account endpoint. */
-export type HenrikAccount = {
-  card?: { small?: string; large?: string; wide?: string };
-};
-
-/** `data` from the MMR (current rank) endpoint. */
-export type HenrikMmr = {
-  current_data?: { currenttierpatched?: string; images?: { small?: string; large?: string } };
-  highest_rank?: { patched_tier?: string; season?: string };
-};
-
-/** One entry of `data` from the MMR history endpoint. */
-export type HenrikMmrHistoryEntry = {
-  match_id?: string;
-  currenttier_patched?: string;
-  images?: { small?: string; large?: string };
-  mmr_change_to_last_game?: number;
-};
+/**
+ * Remembers for 30 seconds that a player's match list couldn't be read, so the
+ * next views don't download it again. The list itself is megabytes and is never
+ * cached, so the caller, which is the one that validated it, says when it was bad.
+ * Stored as a small 502, like any other failure.
+ */
+export async function rememberUnreadableMatches(region: Region, name: string, tag: string, mode: string) {
+  const answer = localError(502, "unreadable", "HenrikDev sent match data this app couldn't read");
+  try {
+    await cacheSetJson(matchesKey(region, name, tag, mode), answer, NEGATIVE_TTL_SECONDS.failure);
+  } catch (e) {
+    console.warn(`[cache] couldn't remember unreadable matches: ${errorSummary(e)}`);
+  }
+}

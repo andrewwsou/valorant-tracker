@@ -25,7 +25,7 @@ const routes = [
   { endpoint: "mmr-history", pattern: /^\/valorant\/v1\/mmr-history\/[^/]+\/([^/]+)\/([^/]+)$/, data: (p) => p.mmrHistory },
   {
     endpoint: "matches",
-    pattern: /^\/valorant\/v3\/matches\/[^/]+\/([^/]+)\/([^/]+)$/,
+    pattern: /^\/valorant\/v4\/matches\/[^/]+\/pc\/([^/]+)\/([^/]+)$/,
     data: (p, query) => p.matches.slice(0, Number(query.get("size") ?? p.matches.length)),
   },
 ];

@@ -12,7 +12,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: id.error }, { status: 400 });
   }
 
-  const size = Math.min(parseInt(searchParams.get("size") ?? "10", 10) || 10, 25);
+  // HenrikDev's v4 match list returns at most 10. Anything that isn't a number means the default.
+  const requested = Number.parseInt(searchParams.get("size") ?? "", 10);
+  const size = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 10) : 10;
   const player = `${id.value.name}#${id.value.tag}`;
   const result = await syncPlayer(id.value, size);
 
@@ -36,6 +38,8 @@ export async function POST(req: NextRequest) {
       });
     case "no-matches":
       return NextResponse.json({ message: "No matches found" });
+    case "invalid-payload":
+      return NextResponse.json({ error: "HenrikDev sent match data this app couldn't read" }, { status: 502 });
     case "player-not-in-matches":
       return NextResponse.json({ error: "Could not resolve player puuid" }, { status: 500 });
     case "synced":

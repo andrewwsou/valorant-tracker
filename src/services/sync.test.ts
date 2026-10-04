@@ -6,17 +6,19 @@ vi.mock("@/lib/prisma", () => ({
     $executeRaw: vi.fn(),
   },
 }));
-vi.mock("@/lib/henrik", () => ({ getMatches: vi.fn() }));
+vi.mock("@/lib/henrik", () => ({ getMatches: vi.fn(), rememberUnreadableMatches: vi.fn() }));
 vi.mock("@/services/matches", () => ({ invalidateRecentMatches: vi.fn() }));
 vi.mock("@/services/player-stats", () => ({ refreshPlayerStats: vi.fn() }));
 
 import { Prisma } from "@/generated/prisma";
-import { getMatches, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik";
+import { getMatches, rememberUnreadableMatches } from "@/lib/henrik";
+import { MatchV4 } from "@/lib/henrik-schemas";
 import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
 import { invalidateRecentMatches } from "@/services/matches";
 import { refreshPlayerStats } from "@/services/player-stats";
 import {
+  agentIconUrl,
   findPlayerByRiotId,
   SYNC_COOLDOWN_MS,
   syncPlayer,
@@ -38,31 +40,58 @@ function rawStatement(n: number) {
 }
 
 const id: RiotId = { region: "na", name: "Enzo", tag: "YYY" };
-const GAME_START = 1_759_500_000;
+/** Start of the test matches, with the fraction of a second HenrikDev includes. */
+const STARTED_AT = "2026-09-30T19:24:10.940Z";
+const STARTED_AT_WHOLE_SECONDS = new Date("2026-09-30T19:24:10.000Z");
+const JETT = "add6443a-41bd-e414-f6ad-e58d267f4e95";
 
-function me(): HenrikPlayer {
+type RawPlayer = Record<string, unknown>;
+type RawMatch = { metadata: Record<string, unknown>; players: RawPlayer[]; teams: unknown };
+
+/** The test player's line, shaped like HenrikDev's v4 match list. */
+function me(): RawPlayer {
   return {
     puuid: "puuid-me",
     name: "enzo",
     tag: "yyy",
-    team: "Red",
-    damage_made: 3100,
-    stats: { kills: 18, deaths: 9, assists: 7, score: 5055, headshots: 12, bodyshots: 30, legshots: 2 },
-    assets: { agent: { small: "agent.png" } },
+    team_id: "Red",
+    agent: { id: JETT, name: "Jett" },
+    stats: {
+      kills: 18,
+      deaths: 9,
+      assists: 7,
+      score: 5055,
+      headshots: 12,
+      bodyshots: 30,
+      legshots: 2,
+      damage: { dealt: 3100, received: 2000 },
+    },
   };
 }
 
-const someoneElse: HenrikPlayer = { puuid: "puuid-other", name: "other", tag: "0001", team: "Blue" };
+const someoneElse: RawPlayer = { puuid: "puuid-other", name: "other", tag: "0001", team_id: "Blue", agent: { name: "Sova" } };
 
-function match(matchid: string | undefined, players: HenrikPlayer[] = [me(), someoneElse]): HenrikMatch {
+/** A v4 match. A match_id of undefined is left out, like a broken upstream item. */
+function match(matchId: string | undefined, players: RawPlayer[] = [me(), someoneElse]): RawMatch {
   return {
-    metadata: { matchid, map: "Haven", mode: "Competitive", game_start: GAME_START },
-    players: { all_players: players },
-    teams: { red: { rounds_won: 13 }, blue: { rounds_won: 9 } },
+    metadata: {
+      match_id: matchId,
+      map: { id: "map-id", name: "Haven" },
+      queue: { id: "competitive", name: "Competitive", mode_type: "Standard" },
+      started_at: STARTED_AT,
+    },
+    players,
+    teams: [
+      { team_id: "Red", rounds: { won: 13, lost: 9 }, won: true },
+      { team_id: "Blue", rounds: { won: 9, lost: 13 }, won: false },
+    ],
   };
 }
 
-function upstreamMatches(matches: HenrikMatch[]) {
+/** A raw match after validation, as the mappers receive it. */
+const parsed = (raw: RawMatch) => MatchV4.parse(raw);
+
+function upstreamMatches(matches: RawMatch[]) {
   return { status: 200, contentType: "application/json", body: JSON.stringify({ data: matches }), cache: "MISS" as const };
 }
 
@@ -71,19 +100,24 @@ function upstreamError(status: number, retryAfterSeconds?: number) {
 }
 
 describe("mapping upstream data", () => {
-  it("converts a match, turning the start time from seconds into a Date", () => {
-    expect(toMatchRecord(match("m1"), "na")).toEqual({
+  it("converts a v4 match into the same columns v3 produced", () => {
+    expect(toMatchRecord(parsed(match("m1")), "na")).toEqual({
       map: "Haven",
       mode: "Competitive",
       region: "na",
-      startedAt: new Date(GAME_START * 1000),
+      // Whole seconds, like v3's game_start, so re-synced rows don't change.
+      startedAt: STARTED_AT_WHOLE_SECONDS,
       roundsRed: 13,
       roundsBlue: 9,
     });
   });
 
-  it("stores null for anything the upstream left out", () => {
-    expect(toMatchRecord({}, "eu")).toEqual({
+  it("stores null for anything the upstream left out or sent with the wrong type", () => {
+    const odd = match("m1");
+    odd.metadata = { match_id: "m1", map: 42, started_at: "yesterday" };
+    odd.teams = "oops";
+
+    expect(toMatchRecord(parsed(odd), "eu")).toEqual({
       map: null,
       mode: null,
       region: "eu",
@@ -93,31 +127,20 @@ describe("mapping upstream data", () => {
     });
   });
 
-  it("stores null for values of the wrong type, so one bad value can't fail the whole batch", () => {
-    const odd = {
-      metadata: { map: 42, mode: { name: "x" }, game_start: "yesterday" },
-      teams: { red: { rounds_won: "13" }, blue: { rounds_won: 1e12 } },
-    } as unknown as HenrikMatch;
-    expect(toMatchRecord(odd, "na")).toEqual({
-      map: null,
-      mode: null,
-      region: "na",
-      startedAt: null,
-      roundsRed: null,
-      roundsBlue: null,
-    });
-
-    const line = toPlayerMatchRecord({
-      team: 7,
-      damage_made: Number.NaN,
-      stats: { kills: "18", deaths: 9.7, assists: null, score: Infinity },
-      assets: { agent: { small: ["x"] } },
-    } as unknown as HenrikPlayer);
-    expect(line).toMatchObject({ team: null, kills: null, deaths: 9, assists: null, score: null, damage: null, agentIcon: null });
+  it("names the mode from the queue id when the queue name is null", () => {
+    const m = match("m1");
+    m.metadata.queue = { id: "competitive", name: null };
+    expect(toMatchRecord(parsed(m), "na").mode).toBe("Competitive");
   });
 
-  it("converts a player's stat line and lowercases the team", () => {
-    expect(toPlayerMatchRecord(me())).toEqual({
+  it("matches a team by name in any case, and leaves a missing team's rounds empty", () => {
+    const m = match("m1");
+    m.teams = [{ team_id: "RED", rounds: { won: 13 } }];
+    expect(toMatchRecord(parsed(m), "na")).toMatchObject({ roundsRed: 13, roundsBlue: null });
+  });
+
+  it("converts a player's stat line: damage dealt, lowercase team, and the agent's icon", () => {
+    expect(toPlayerMatchRecord(parsed(match("m1")).players[0])).toEqual({
       team: "red",
       kills: 18,
       deaths: 9,
@@ -127,13 +150,24 @@ describe("mapping upstream data", () => {
       headshots: 12,
       bodyshots: 30,
       legshots: 2,
-      agentIcon: "agent.png",
+      agentIcon: `https://media.valorant-api.com/agents/${JETT}/displayicon.png`,
     });
   });
 
+  it("stores null stats for a player whose stats are missing or of the wrong type", () => {
+    const player = { ...me(), team_id: 7, stats: { kills: "18", deaths: 9.7, damage: null }, agent: "Jett" };
+    const line = toPlayerMatchRecord(parsed(match("m1", [player])).players[0]);
+    expect(line).toMatchObject({ team: null, kills: null, deaths: 9, assists: null, damage: null, agentIcon: null });
+  });
+
+  it("builds an agent icon only from an id", () => {
+    expect(agentIconUrl(null)).toBeNull();
+    expect(agentIconUrl(JETT)).toBe(`https://media.valorant-api.com/agents/${JETT}/displayicon.png`);
+  });
+
   it("finds a player by Riot ID regardless of case", () => {
-    expect(findPlayerByRiotId(match("m1"), "ENZO", "YyY")?.puuid).toBe("puuid-me");
-    expect(findPlayerByRiotId(match("m1"), "nobody", "0000")).toBeUndefined();
+    expect(findPlayerByRiotId(parsed(match("m1")), "ENZO", "YyY")?.puuid).toBe("puuid-me");
+    expect(findPlayerByRiotId(parsed(match("m1")), "nobody", "0000")).toBeUndefined();
   });
 });
 
@@ -189,7 +223,7 @@ describe("syncPlayer", () => {
     expect(matches.sql).toContain('INSERT INTO "Match"');
     expect(matches.sql).toContain('ON CONFLICT ("id") DO UPDATE');
     expect(matches.sql).toContain("::timestamptz AT TIME ZONE 'UTC'");
-    expect(matches.values).toEqual(["m1", "Haven", "Competitive", "na", new Date(GAME_START * 1000), 13, 9, "m2", "Haven", "Competitive", "na", new Date(GAME_START * 1000), 13, 9]);
+    expect(matches.values).toEqual(["m1", "Haven", "Competitive", "na", STARTED_AT_WHOLE_SECONDS, 13, 9, "m2", "Haven", "Competitive", "na", STARTED_AT_WHOLE_SECONDS, 13, 9]);
 
     const lines = rawStatement(1);
     expect(lines.sql).toContain('INSERT INTO "PlayerMatch"');
@@ -205,7 +239,7 @@ describe("syncPlayer", () => {
 
   it("sends each match once, in a fixed order, even when upstream repeats one", async () => {
     const renamed = match("m2");
-    renamed.metadata!.map = "Lotus";
+    renamed.metadata.map = { name: "Lotus" };
     vi.mocked(getMatches).mockResolvedValue(upstreamMatches([match("m2"), match("m1"), renamed]));
 
     await expect(syncPlayer(id)).resolves.toMatchObject({ matchesUpserted: 2, playerMatchesUpserted: 2 });
@@ -217,27 +251,78 @@ describe("syncPlayer", () => {
     expect([rawStatement(1).values[0], rawStatement(1).values[12]]).toEqual(["m1", "m2"]);
   });
 
-  it("skips a match whose ID isn't a string", async () => {
+  it("drops a match it can't identify, stores the rest, and says so in the log", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const numbered = match("m1");
-    (numbered.metadata as { matchid: unknown }).matchid = 123;
-    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([numbered, match("m2")]));
+    numbered.metadata.match_id = 123;
+    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([numbered, match("m2"), match(undefined)]));
 
-    await expect(syncPlayer(id)).resolves.toMatchObject({ matchesUpserted: 1 });
+    await expect(syncPlayer(id)).resolves.toMatchObject({ status: "synced", matchesUpserted: 1 });
+    expect(rawStatement(0).values[0]).toBe("m2");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("matches: dropped 2 of 3 items"));
   });
 
-  it("skips matches without an ID and matches the player isn't in", async () => {
-    vi.mocked(getMatches).mockResolvedValue(
-      upstreamMatches([match("m1"), match(undefined), match("m3", [someoneElse])]),
-    );
+  it("keeps a match with one bad value, storing null just for that value", async () => {
+    const odd = match("m1");
+    (odd.players[0].stats as Record<string, unknown>).kills = "lots";
+    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([odd]));
+
+    await expect(syncPlayer(id)).resolves.toMatchObject({ matchesUpserted: 1, playerMatchesUpserted: 1 });
+    // matchId, playerId, team, then kills.
+    expect(rawStatement(1).values.slice(0, 5)).toEqual(["m1", "player-1", "red", null, 9]);
+  });
+
+  it("skips matches the player isn't in", async () => {
+    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([match("m1"), match("m3", [someoneElse])]));
 
     await expect(syncPlayer(id)).resolves.toEqual({ status: "synced", matchesUpserted: 2, playerMatchesUpserted: 1 });
   });
 
-  it("sends no statement for an empty batch", async () => {
-    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([match(undefined)]));
+  it("finds the player in a later match when the first one has no players", async () => {
+    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([match("m1", []), match("m2")]));
 
-    await expect(syncPlayer(id)).resolves.toEqual({ status: "synced", matchesUpserted: 0, playerMatchesUpserted: 0 });
+    await expect(syncPlayer(id)).resolves.toMatchObject({ status: "synced", playerMatchesUpserted: 1 });
+    expect(db.player.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { puuid: "puuid-me" } }));
+  });
+
+  it("reports an answer it can't read at all, and writes nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const body of [JSON.stringify({ data: null }), "not json", JSON.stringify({ data: [match(undefined)] })]) {
+      vi.mocked(getMatches).mockResolvedValue({ ...upstreamMatches([]), body });
+      await expect(syncPlayer(id), body).resolves.toEqual({ status: "invalid-payload" });
+    }
+    expect(db.player.upsert).not.toHaveBeenCalled();
     expect(db.$executeRaw).not.toHaveBeenCalled();
+    expect(refreshPlayerStats).not.toHaveBeenCalled();
+  });
+
+  it("remembers a fresh unreadable list, so the next views don't download it again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // A full-size list where no match can be identified.
+    const unreadable = upstreamMatches(Array.from({ length: 10 }, () => match(undefined)));
+    expect(unreadable.body.length).toBeGreaterThan(512);
+    vi.mocked(getMatches).mockResolvedValue(unreadable);
+
+    await expect(syncPlayer(id)).resolves.toEqual({ status: "invalid-payload" });
+    expect(rememberUnreadableMatches).toHaveBeenCalledExactlyOnceWith("na", "Enzo", "YYY", "competitive");
+
+    vi.mocked(rememberUnreadableMatches).mockClear();
+    vi.mocked(getMatches).mockResolvedValue({ ...unreadable, cache: "HIT" });
+    await syncPlayer(id);
+    expect(rememberUnreadableMatches).not.toHaveBeenCalled();
+  });
+
+  it("reports validation only for fresh answers, not for every view of a cached one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const unreadable = { ...upstreamMatches([]), body: JSON.stringify({ data: null }) };
+
+    vi.mocked(getMatches).mockResolvedValue({ ...unreadable, cache: "HIT" });
+    await syncPlayer(id);
+    expect(warn).not.toHaveBeenCalled();
+
+    vi.mocked(getMatches).mockResolvedValue(unreadable);
+    await syncPlayer(id);
+    expect(warn).toHaveBeenCalledWith("[henrik] matches response had no readable data");
   });
 
   it("passes upstream errors through, with how long to wait, without writing anything", async () => {
