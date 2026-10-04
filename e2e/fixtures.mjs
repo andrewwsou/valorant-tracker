@@ -1,4 +1,4 @@
-// Deterministic fake data for the mock HenrikDev API.
+// Deterministic fake data for the mock HenrikDev API, in the shapes the app reads.
 //
 // Four known players, all tagged E2E. Each player's matches repeat one stat line,
 // and every match has 20 rounds, so the expected stats are round numbers:
@@ -18,31 +18,38 @@ const MAPS = ["Ascent", "Bind", "Haven", "Lotus", "Sunset"];
 /** Start of each player's newest match, in seconds, like the real API. */
 const NEWEST_GAME_START = Date.UTC(2026, 8, 20, 18, 0, 0) / 1000;
 
-/** Matches newest first: the first `wins` are wins, the rest are losses. */
-function buildMatches({ player, idPrefix, count, wins, line }) {
+/**
+ * Matches newest first, shaped like HenrikDev's v4 match list: the first `wins`
+ * are wins, the rest are losses. Agents carry no id, so no agent icon URL is
+ * built and the tests never load images from the internet.
+ */
+export function buildMatches({ player, idPrefix, count, wins, line }) {
   return Array.from({ length: count }, (_, i) => {
     const won = i < wins;
     const team = i % 2 === 0 ? "Red" : "Blue";
     const ours = won ? 13 : 7;
     const theirs = won ? 7 : 13;
     const [red, blue] = team === "Red" ? [ours, theirs] : [theirs, ours];
+    const stats = (s, damage) => ({ ...s, damage: { dealt: damage, received: 0 } });
 
     return {
       metadata: {
-        matchid: `${idPrefix}-${String(i + 1).padStart(2, "0")}`,
-        map: MAPS[i % MAPS.length],
-        mode: "Competitive",
-        game_start: NEWEST_GAME_START - i * 3600,
+        match_id: `${idPrefix}-${String(i + 1).padStart(2, "0")}`,
+        map: { id: "e2e-map", name: MAPS[i % MAPS.length] },
+        started_at: new Date((NEWEST_GAME_START - i * 3600) * 1000).toISOString(),
+        queue: { id: "competitive", name: "Competitive", mode_type: "Standard" },
+        is_completed: true,
+        platform: "pc",
       },
-      players: {
-        all_players: [
-          {
-            name: player.name,
-            tag: player.tag,
-            puuid: player.puuid,
-            team,
-            damage_made: line.damage,
-            stats: {
+      players: [
+        {
+          puuid: player.puuid,
+          name: player.name,
+          tag: player.tag,
+          team_id: team,
+          agent: { name: "Jett" },
+          stats: stats(
+            {
               kills: line.kills,
               deaths: line.deaths,
               assists: line.assists,
@@ -51,18 +58,20 @@ function buildMatches({ player, idPrefix, count, wins, line }) {
               bodyshots: line.bodyshots,
               legshots: line.legshots,
             },
-            assets: { agent: {} },
-          },
-          {
-            ...RIVAL,
-            team: team === "Red" ? "Blue" : "Red",
-            damage_made: 2500,
-            stats: { kills: 16, deaths: 20, assists: 3, score: 4000, headshots: 5, bodyshots: 30, legshots: 5 },
-            assets: { agent: {} },
-          },
-        ],
-      },
-      teams: { red: { rounds_won: red }, blue: { rounds_won: blue } },
+            line.damage,
+          ),
+        },
+        {
+          ...RIVAL,
+          team_id: team === "Red" ? "Blue" : "Red",
+          agent: { name: "Sova" },
+          stats: stats({ kills: 16, deaths: 20, assists: 3, score: 4000, headshots: 5, bodyshots: 30, legshots: 5 }, 2500),
+        },
+      ],
+      teams: [
+        { team_id: "Red", rounds: { won: red, lost: blue }, won: red > blue },
+        { team_id: "Blue", rounds: { won: blue, lost: red }, won: blue > red },
+      ],
     };
   });
 }
@@ -76,8 +85,8 @@ function definePlayer({ name, puuid, rank, peak, idPrefix, count, wins, line }) 
     account: { ...player, account_level: 120, card: {} },
     mmr: { current_data: { currenttierpatched: rank, images: {} }, highest_rank: { patched_tier: peak, season: "e9a3" } },
     mmrHistory: matches.map((m) => ({
-      match_id: m.metadata.matchid,
-      currenttier_patched: rank,
+      match_id: m.metadata.match_id,
+      currenttierpatched: rank,
       images: {},
       mmr_change_to_last_game: 18,
     })),

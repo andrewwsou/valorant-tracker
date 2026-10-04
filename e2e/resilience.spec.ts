@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
 import { APP_URL, appEnv, MOCK_API_URL } from "./env.mjs";
+import { buildMatches } from "./fixtures.mjs";
 
 // How the app behaves when HenrikDev misbehaves: timeouts, retries, rate limits,
 // and cached failures, checked against the real app and a scripted mock API.
@@ -204,4 +205,68 @@ test("the nightly job waits as long as the app asks, then syncs", async () => {
   expect(stdout).toContain("Tester#E2E: HTTP 429, waiting 2s as asked");
   expect(stdout).toContain('Tester#E2E: {"ok":true');
   expect((await callsFor("Tester")).matches).toBe(before + 2);
+});
+
+test("one unreadable match or value doesn't cost the rest of the sync", async ({ request }) => {
+  const name = fresh("Partial");
+  const puuid = `e2e-puuid-${name.toLowerCase()}`;
+  const matches = buildMatches({
+    player: { name, tag: "E2E", puuid },
+    idPrefix: `e2e-${name.toLowerCase()}`,
+    count: 10,
+    wins: 5,
+    line: { kills: 20, deaths: 16, assists: 5, score: 5000, damage: 3200, headshots: 10, bodyshots: 25, legshots: 5 },
+  });
+  (matches[3].metadata as { match_id: unknown }).match_id = 123; // can't be stored: dropped
+  matches[7].players[0].stats.kills = "lots"; // one bad value: stored as null
+  await script("matches", name, [{ body: { status: 200, data: matches } }]);
+
+  const res = await request.post(`/api/sync?name=${name}&tag=E2E`);
+  expect(await res.json()).toMatchObject({ ok: true, matchesUpserted: 9, playerMatchesUpserted: 9 });
+
+  const db = new PrismaClient({ datasourceUrl: appEnv.DATABASE_URL });
+  try {
+    const player = await db.player.findUniqueOrThrow({ where: { puuid } });
+    const lines = await db.playerMatch.findMany({ where: { playerId: player.id }, orderBy: { matchId: "asc" } });
+    expect(lines).toHaveLength(9);
+    expect(lines.find((l) => l.matchId.endsWith("-08"))?.kills).toBeNull();
+    expect(lines.find((l) => l.matchId.endsWith("-07"))?.kills).toBe(20);
+    expect(lines.some((l) => l.matchId.endsWith("-04"))).toBe(false);
+  } finally {
+    // Leave the other specs only the fixture players.
+    await db.player.deleteMany({ where: { puuid } });
+    await db.match.deleteMany({ where: { id: { startsWith: `e2e-${name.toLowerCase()}` } } });
+    await db.$disconnect();
+  }
+});
+
+test("an answer without readable match data is reported, and not asked for again right away", async ({ page }) => {
+  const name = fresh("Garbled");
+  // A full-size list where no match can be identified, like an upstream field rename.
+  const unreadable = buildMatches({
+    player: { name, tag: "E2E", puuid: `e2e-puuid-${name.toLowerCase()}` },
+    idPrefix: "unused",
+    count: 10,
+    wins: 5,
+    line: { kills: 20, deaths: 16, assists: 5, score: 5000, damage: 3200, headshots: 10, bodyshots: 25, legshots: 5 },
+    // match_id renamed: undefined values are left out of the JSON.
+  }).map((m) => ({ ...m, metadata: { ...m.metadata, match_id: undefined, id: m.metadata.match_id } }));
+  await script("matches", name, [{ body: { status: 200, data: unreadable } }]);
+
+  await page.goto(`/player/${name}/E2E`);
+  await expect(page.getByText("Couldn't read recent matches")).toBeVisible();
+
+  // Remembered for 30 seconds like a failure, so the second view doesn't download it again.
+  await page.reload();
+  await expect(page.getByText("Couldn't sync recent matches (HTTP 502)")).toBeVisible();
+  expect((await callsFor(name)).matches).toBe(1);
+});
+
+test("a tiny answer without a data list is cached like a failure too", async ({ request }) => {
+  const name = fresh("Empty");
+  await script("matches", name, [{ body: { status: 200, data: null } }]);
+
+  expect((await request.post(`/api/sync?name=${name}&tag=E2E`)).status()).toBe(502);
+  expect((await request.post(`/api/sync?name=${name}&tag=E2E`)).status()).toBe(502);
+  expect((await callsFor(name)).matches).toBe(1);
 });

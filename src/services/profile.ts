@@ -1,12 +1,13 @@
+import { getAccount, getMmr, getMmrHistory, type CachedUpstreamResponse } from "@/lib/henrik";
 import {
-  getAccount,
-  getMmr,
-  getMmrHistory,
-  type CachedUpstreamResponse,
-  type HenrikAccount,
-  type HenrikMmr,
-  type HenrikMmrHistoryEntry,
-} from "@/lib/henrik";
+  AccountV1,
+  MmrHistoryEntryV1,
+  MmrV2,
+  parseListBody,
+  parseObjectBody,
+  reportValidation,
+  type ParseReport,
+} from "@/lib/henrik-schemas";
 import { msSince, nowMs } from "@/lib/metrics";
 import type { RiotId } from "@/lib/riot-id";
 import { profileDuration, withSpan } from "@/lib/telemetry";
@@ -59,11 +60,22 @@ async function loadProfile(id: RiotId): Promise<PlayerProfile> {
     errors.push("Couldn't sync recent matches");
   } else if (sync.value.status === "upstream-error") {
     errors.push(`Couldn't sync recent matches (HTTP ${sync.value.httpStatus})`);
+  } else if (sync.value.status === "invalid-payload") {
+    errors.push("Couldn't read recent matches");
   }
 
-  const card = readData<HenrikAccount>(account, "player card", errors);
-  const current = readData<HenrikMmr>(mmr, "current rank", errors);
-  const rankHistory = readData<HenrikMmrHistoryEntry[]>(history, "rank history", errors);
+  const card = readData(account, "player card", errors, (body) => {
+    const { data, report } = parseObjectBody("account", body, AccountV1);
+    return { value: data, report };
+  });
+  const current = readData(mmr, "current rank", errors, (body) => {
+    const { data, report } = parseObjectBody("mmr", body, MmrV2);
+    return { value: data, report };
+  });
+  const rankHistory = readData(history, "rank history", errors, (body) => {
+    const { items, report } = parseListBody("mmr-history", body, MmrHistoryEntryV1);
+    return { value: items, report };
+  });
 
   const paused = pausedNotice([
     sync.status === "fulfilled" && sync.value.status === "upstream-error"
@@ -82,8 +94,8 @@ async function loadProfile(id: RiotId): Promise<PlayerProfile> {
   }
 
   const rankIconByMatch = new Map<string, string>();
-  for (const entry of Array.isArray(rankHistory) ? rankHistory : []) {
-    if (entry.match_id && entry.images?.small) rankIconByMatch.set(entry.match_id, entry.images.small);
+  for (const entry of rankHistory ?? []) {
+    if (entry.images?.small) rankIconByMatch.set(entry.match_id, entry.images.small);
   }
 
   return {
@@ -112,11 +124,16 @@ function pausedNotice(results: ({ status: number; retryAfterSeconds?: number } |
     : `HenrikDev looks unavailable. Live data will be retried in about ${seconds}s.`;
 }
 
-/** Returns `data` from a successful upstream response, or records an error and returns null. */
+/**
+ * Returns the validated `data` from a successful upstream response, or records an
+ * error and returns null. Validation is only reported for fresh responses, so the
+ * metrics count what HenrikDev sent, not how often a cached copy was viewed.
+ */
 function readData<T>(
   result: PromiseSettledResult<CachedUpstreamResponse>,
   what: string,
   errors: string[],
+  parse: (body: string) => { value: T | null; report: ParseReport },
 ): T | null {
   if (result.status === "rejected") {
     console.error(`[profile] loading ${what} failed:`, result.reason);
@@ -127,10 +144,8 @@ function readData<T>(
     errors.push(`Couldn't load ${what} (HTTP ${result.value.status})`);
     return null;
   }
-  try {
-    return (JSON.parse(result.value.body) as { data?: T }).data ?? null;
-  } catch {
-    errors.push(`Couldn't read ${what}`);
-    return null;
-  }
+  const { value, report } = parse(result.value.body);
+  if (result.value.cache === "MISS") reportValidation(report);
+  if (value === null) errors.push(`Couldn't read ${what}`);
+  return value;
 }
