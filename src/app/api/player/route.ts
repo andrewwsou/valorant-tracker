@@ -1,44 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
+import type { NextRequest } from "next/server";
+import { getAccount } from "@/lib/henrik";
+import { jsonError, passThrough } from "@/lib/http";
+import { nowMs } from "@/lib/metrics";
+import { parseRiotId } from "@/lib/riot-id";
 
-export const dynamic = 'force-dynamic';
-const enc = encodeURIComponent;
+export const dynamic = "force-dynamic";
 
+/** Player card and account level for a Riot ID. Cached in Redis; see CACHE_TTL_SECONDS. */
 export async function GET(req: NextRequest) {
+  const t0 = nowMs();
+  const id = parseRiotId(req.nextUrl.searchParams);
+  if (!id.ok) return jsonError(400, id.error);
+
   try {
-    
-    const { searchParams } = new URL(req.url);
-
-    const name   = (searchParams.get('name') ?? '').trim();
-    const tag    = (searchParams.get('tag') ?? '').trim();
-
-    if (!name || !tag) {
-      return NextResponse.json({ error: 'Missing name or tag' }, { status: 400 });
-    }
-
-    const api_call =
-      `https://api.henrikdev.xyz/valorant/v1/account/` +
-      `${enc(name)}/${enc(tag)}`;
-
-    const r = await fetch(api_call, {
-      headers: {
-        Authorization: process.env.HENRIKDEV_API_KEY as string,
-      },
-      cache: 'no-store',
-    });
-
-    const text = await r.text();
-    const contentType = r.headers.get('content-type') ?? 'application/json';
-
-    // console.log("YO")
-    // const preview = text.slice(0, 10000);
-    // console.log('[matches] upstream status/content-type:', r.status, contentType);
-    // console.log('[matches] upstream body (preview 400):', preview);
-
-    return new NextResponse(text, {
-      status: r.status,
-      headers: { 'content-type': contentType, 'cache-control': 'no-store' },
-    });
-  } catch {
-    return NextResponse.json({ error: 'Unexpected server error' }, { status: 500 });
+    return passThrough(await getAccount(id.value.name, id.value.tag), t0);
+  } catch (e) {
+    console.error("[api/player]", e);
+    return jsonError(500, "Unexpected server error");
   }
 }

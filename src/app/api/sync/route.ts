@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { invalidatePlayerMatches } from "@/lib/redis";
-import type { HenrikMatch } from "@/lib/henrik";
+import { getMatches, type HenrikMatch } from "@/lib/henrik";
+import { parseRiotId } from "@/lib/riot-id";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const region = (searchParams.get("region") ?? "na").trim();
-  const name = (searchParams.get("name") ?? "").trim();
-  const tag = (searchParams.get("tag") ?? "").trim();
+  const { searchParams } = req.nextUrl;
+  const id = parseRiotId(searchParams);
+  if (!id.ok) {
+    return NextResponse.json({ error: id.error }, { status: 400 });
+  }
+  const { region, name, tag } = id.value;
 
   const size = Math.min(parseInt(searchParams.get("size") ?? "10", 10) || 10, 25);
-
-  if (!name || !tag) {
-    return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
-  }
 
   const COOLDOWN_MS = 5 * 60_000;
 
@@ -38,27 +37,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const base =
-    process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+  const upstream = await getMatches(region, name, tag, { size, mode: "competitive" });
 
-  const qs = new URLSearchParams({
-    region,
-    name,
-    tag,
-    size: String(size),
-    mode: "competitive",
-  });
-
-  const r = await fetch(`${base}/api/matches?${qs.toString()}`, { cache: "no-store" });
-
-  if (!r.ok) {
-    const text = await r.text();
-    return new NextResponse(text, { status: r.status });
+  if (upstream.status < 200 || upstream.status >= 300) {
+    return new NextResponse(upstream.body, {
+      status: upstream.status,
+      headers: { "content-type": upstream.contentType },
+    });
   }
 
-  const json = await r.json();
-  const matches: HenrikMatch[] = Array.isArray(json?.data) ? json.data : [];
+  const json = JSON.parse(upstream.body) as { data?: unknown };
+  const matches: HenrikMatch[] = Array.isArray(json?.data) ? (json.data as HenrikMatch[]) : [];
 
   if (matches.length === 0) {
     return NextResponse.json({ message: "No matches found" });
