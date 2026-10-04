@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
-import { appEnv } from "./env.mjs";
+import { appEnv, SYNC_AUTH } from "./env.mjs";
 import { PLAYERS } from "./fixtures.mjs";
 
 // Ranks the four fixture players (see fixtures.mjs). Among the three with 10
@@ -12,7 +12,7 @@ test.beforeAll(async ({ request }) => {
   await db.player.updateMany({ data: { lastSyncedAt: null } });
   await db.$disconnect();
   for (const p of PLAYERS) {
-    const res = await request.post(`/api/sync?name=${p.name}&tag=${p.tag}`);
+    const res = await request.post(`/api/sync?name=${p.name}&tag=${p.tag}`, { headers: SYNC_AUTH });
     expect(res.ok(), `${p.name}: ${await res.text()}`).toBe(true);
   }
 });

@@ -6,7 +6,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
 import { readOnly } from "../src/mcp/read-only";
-import { appEnv } from "./env.mjs";
+import { appEnv, SYNC_AUTH } from "./env.mjs";
 import { PLAYERS } from "./fixtures.mjs";
 
 // Starts the MCP server the way the README tells AI clients to: over stdio, from
@@ -27,7 +27,7 @@ test.beforeAll(async ({ request }) => {
   await db.player.updateMany({ data: { lastSyncedAt: null } });
   await db.$disconnect();
   for (const p of PLAYERS) {
-    const res = await request.post(`/api/sync?name=${p.name}&tag=${p.tag}`);
+    const res = await request.post(`/api/sync?name=${p.name}&tag=${p.tag}`, { headers: SYNC_AUTH });
     expect(res.ok(), `${p.name}: ${await res.text()}`).toBe(true);
   }
 });

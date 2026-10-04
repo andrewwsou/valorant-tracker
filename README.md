@@ -17,11 +17,11 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. Cache calls give up after 500 ms instead of retrying for about 4 seconds. If the database goes down, health returns 503.
 - **Leaderboard.** Rank tracked players by tracker score, ACS, K/D, or win rate, with a minimum-matches filter. Each request is one indexed query plus a primary-key lookup for names; sort keys come from an allowlist, and exact ties share a rank.
 - **MCP server for AI agents.** Three typed tools let Claude and other MCP clients read player stats, recent matches, and the leaderboard over stdio. Postgres enforces read-only access, every call has hard caps on rate, result size, and query time, and the server exits when its client disconnects or sits idle. It never calls an AI model itself, and a CI test keeps it that way.
-- **Tested at three levels.** 212 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if either the profile page or the leaderboard passes a 250 ms p95 at 20 requests per second each; locally the cached profile page held a 20 ms p95 at 100 requests per second.
+- **Tested at three levels.** 218 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if either the profile page or the leaderboard passes a 250 ms p95 at 20 requests per second each; locally the cached profile page held a 20 ms p95 at 100 requests per second.
 - **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
 - **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, the end-to-end and load tests, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
-- **Nightly sync** through a scheduled GitHub Actions workflow.
+- **Nightly sync that fails loudly.** A scheduled GitHub Actions job syncs tracked players through an endpoint that needs a secret, waits out rate limits as the app asks, and fails the run with a per-player summary when anything goes wrong.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ flowchart LR
     end
 
     browser([Browser]) --> pages
-    cron[Nightly GitHub Actions job] -->|"POST /api/sync"| api
+    cron[Nightly GitHub Actions job] -->|"POST /api/sync with a bearer secret"| api
     client -->|cache-aside with TTL| redis[(Redis)]
     client -->|on cache miss| henrik[HenrikDev VALORANT API]
     services -->|cached reads| redis
@@ -233,9 +233,15 @@ For the load test, start `npm run e2e:serve` in one terminal and run `npm run te
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Where to send traces and metrics. Telemetry is off when it's unset |
 | `OTEL_EXPORTER_OTLP_HEADERS` | no | Auth headers for a hosted OTLP backend |
 | `OTEL_SERVICE_NAME` | no | Service name on traces and metrics. Defaults to `valorant-stattrack` |
+| `CRON_SECRET` | for the nightly sync | Secret that `POST /api/sync` requires as a bearer token. At least 32 characters: `openssl rand -hex 32`. Without it the endpoint stays closed (503); profile pages are unaffected |
 | `MCP_*` | no | Lower the MCP server's limits. See [Cost safeguards](#cost-safeguards) |
 
-The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed app, and `SYNC_PLAYERS`, a JSON array such as `[{"name":"PlayerName","tag":"NA1"}]`.
+The nightly workflow reads three GitHub Actions secrets:
+- `BASE_URL`: the deployed app.
+- `CRON_SECRET`: the same value as the app's `CRON_SECRET`.
+- `SYNC_PLAYERS`: a JSON array such as `[{"name":"PlayerName","tag":"NA1"}]`.
+
+The run fails, and shows red, when any player fails (exit 1) or the setup is wrong (exit 2). Its summary page lists every player's outcome.
 
 ## API
 
@@ -244,7 +250,7 @@ The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed 
 | `GET` | `/api/player?name=&tag=` | Account details and player card |
 | `GET` | `/api/overall?region=&name=&tag=` | Current and peak rank |
 | `GET` | `/api/elo?region=&name=&tag=` | Rank change for each recent match |
-| `POST` | `/api/sync?region=&name=&tag=&size=` | Pulls up to 10 recent matches into Postgres. Answers 502 if HenrikDev's match data can't be read |
+| `POST` | `/api/sync?region=&name=&tag=&size=` | Pulls up to 10 recent matches into Postgres. Needs `Authorization: Bearer <CRON_SECRET>` (401 without it, 503 if the server has no secret). Every answer has an `outcome`; 502 if HenrikDev's match data can't be read |
 | `GET` | `/api/db/matches?name=&tag=&limit=` | Recent matches from Postgres |
 | `GET` | `/api/leaderboard?sort=&minMatches=&limit=` | Top players. `sort` is `trackerScore` (default), `acs`, `kd`, or `winRate`; `minMatches` 1 to 10 (default 5); `limit` 1 to 100 (default 25) |
 | `GET` | `/api/health` | Database and cache status |
