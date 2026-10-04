@@ -17,9 +17,11 @@
     "test:e2e": "playwright test",
     "test:load": "docker run --rm -v \"$PWD/load:/load\" -e BASE_URL=${BASE_URL:-http://host.docker.internal:3100} grafana/k6:2.3.0 run /load/profile-load.js",
     "e2e:serve": "node e2e/serve.mjs",
-    "db:backfill-stats": "tsx scripts/backfill-player-stats.ts"
+    "db:backfill-stats": "tsx scripts/backfill-player-stats.ts",
+    "mcp": "tsx src/mcp/main.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "^2.3.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.222.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
@@ -32,10 +34,12 @@
     "@upstash/redis": "^1.36.0",
     "next": "15.5.27",
     "react": "19.1.9",
-    "react-dom": "19.1.9"
+    "react-dom": "19.1.9",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@modelcontextprotocol/client": "^2.3.0",
     "@opentelemetry/context-async-hooks": "^2.11.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",
     "@playwright/test": "^1.63.0",
