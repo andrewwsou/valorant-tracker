@@ -1,3 +1,4 @@
+import { Prisma } from "@/generated/prisma";
 import { getMatches, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik";
 import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
@@ -13,7 +14,7 @@ export type SyncResult =
   | { status: "synced"; matchesUpserted: number; playerMatchesUpserted: number }
   | { status: "no-matches" }
   | { status: "player-not-in-matches" }
-  | { status: "upstream-error"; httpStatus: number; contentType: string; body: string };
+  | { status: "upstream-error"; httpStatus: number; contentType: string; body: string; retryAfterSeconds?: number };
 
 /** Finds a player in a match by Riot ID. Riot IDs ignore case. */
 export function findPlayerByRiotId(match: HenrikMatch, name: string, tag: string): HenrikPlayer | undefined {
@@ -24,33 +25,99 @@ export function findPlayerByRiotId(match: HenrikMatch, name: string, tag: string
   );
 }
 
+/**
+ * Upstream data is untrusted, and the batch writes one statement for all rows:
+ * a single value of the wrong type would fail the whole sync. So anything that
+ * isn't what the column holds becomes null instead. Payload validation comes later.
+ */
+const INT_MAX = 2_147_483_647;
+const int = (v: unknown) =>
+  typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= INT_MAX ? Math.trunc(v) : null;
+const text = (v: unknown) => (typeof v === "string" ? v : null);
+
 /** The `Match` columns stored for one upstream match. */
 export function toMatchRecord(match: HenrikMatch, region: string) {
+  const start = match.metadata?.game_start;
+  const startedAt = typeof start === "number" && start > 0 ? new Date(start * 1000) : null;
   return {
-    map: match.metadata?.map ?? null,
-    mode: match.metadata?.mode ?? null,
+    map: text(match.metadata?.map),
+    mode: text(match.metadata?.mode),
     region,
-    startedAt: match.metadata?.game_start ? new Date(match.metadata.game_start * 1000) : null,
-    roundsRed: match.teams?.red?.rounds_won ?? null,
-    roundsBlue: match.teams?.blue?.rounds_won ?? null,
+    startedAt: startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : null,
+    roundsRed: int(match.teams?.red?.rounds_won),
+    roundsBlue: int(match.teams?.blue?.rounds_won),
   };
 }
 
 /** The `PlayerMatch` columns stored for one player in one match. */
 export function toPlayerMatchRecord(player: HenrikPlayer) {
   return {
-    // Optional call kept on purpose: upstream data is untrusted and may not be a string.
-    team: player.team?.toLowerCase?.() ?? null,
-    kills: player.stats?.kills ?? null,
-    deaths: player.stats?.deaths ?? null,
-    assists: player.stats?.assists ?? null,
-    score: player.stats?.score ?? null,
-    damage: player.damage_made ?? null,
-    headshots: player.stats?.headshots ?? null,
-    bodyshots: player.stats?.bodyshots ?? null,
-    legshots: player.stats?.legshots ?? null,
-    agentIcon: player.assets?.agent?.small ?? null,
+    team: text(player.team)?.toLowerCase() ?? null,
+    kills: int(player.stats?.kills),
+    deaths: int(player.stats?.deaths),
+    assists: int(player.stats?.assists),
+    score: int(player.stats?.score),
+    damage: int(player.damage_made),
+    headshots: int(player.stats?.headshots),
+    bodyshots: int(player.stats?.bodyshots),
+    legshots: int(player.stats?.legshots),
+    agentIcon: text(player.assets?.agent?.small),
   };
+}
+
+type MatchUpsert = ReturnType<typeof toMatchRecord> & { id: string };
+type PlayerMatchUpsert = ReturnType<typeof toPlayerMatchRecord> & { matchId: string };
+
+/**
+ * One row per key, the last one winning like a row-by-row loop would, sorted by key.
+ * A batch upsert can't touch the same row twice (Postgres error 21000), and a fixed
+ * order stops two syncs that share matches, such as teammates, from deadlocking.
+ */
+export function uniqueByKey<T>(rows: T[], key: (row: T) => string): T[] {
+  const byKey = new Map<string, T>();
+  for (const row of rows) byKey.set(key(row), row);
+  return [...byKey.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, row]) => row);
+}
+
+/**
+ * Upserts every match in one statement. Returns the number of rows written.
+ * startedAt is cast to UTC explicitly: the column has no time zone, and a raw
+ * query's timestamp would otherwise be shifted by the session's time zone.
+ */
+function upsertMatches(rows: MatchUpsert[]): Promise<number> {
+  if (rows.length === 0) return Promise.resolve(0);
+  const values = rows.map(
+    (m) =>
+      Prisma.sql`(${m.id}, ${m.map}, ${m.mode}, ${m.region}, (${m.startedAt}::timestamptz AT TIME ZONE 'UTC'), ${m.roundsRed}, ${m.roundsBlue})`,
+  );
+  return prisma.$executeRaw`
+    INSERT INTO "Match" ("id", "map", "mode", "region", "startedAt", "roundsRed", "roundsBlue")
+    VALUES ${Prisma.join(values)}
+    ON CONFLICT ("id") DO UPDATE SET
+      "map" = EXCLUDED."map", "mode" = EXCLUDED."mode", "region" = EXCLUDED."region",
+      "startedAt" = EXCLUDED."startedAt", "roundsRed" = EXCLUDED."roundsRed", "roundsBlue" = EXCLUDED."roundsBlue"`;
+}
+
+/**
+ * Upserts the player's stat lines in one statement. New rows get a UUID for an
+ * id; older rows keep the cuid Prisma generated. Nothing reads the id itself.
+ */
+function upsertPlayerMatches(playerId: string, rows: PlayerMatchUpsert[]): Promise<number> {
+  if (rows.length === 0) return Promise.resolve(0);
+  const values = rows.map(
+    (l) => Prisma.sql`(gen_random_uuid()::text, ${l.matchId}, ${playerId}, ${l.team},
+      ${l.kills}, ${l.deaths}, ${l.assists}, ${l.score}, ${l.damage},
+      ${l.headshots}, ${l.bodyshots}, ${l.legshots}, ${l.agentIcon})`,
+  );
+  return prisma.$executeRaw`
+    INSERT INTO "PlayerMatch" ("id", "matchId", "playerId", "team", "kills", "deaths", "assists",
+      "score", "damage", "headshots", "bodyshots", "legshots", "agentIcon")
+    VALUES ${Prisma.join(values)}
+    ON CONFLICT ("matchId", "playerId") DO UPDATE SET
+      "team" = EXCLUDED."team", "kills" = EXCLUDED."kills", "deaths" = EXCLUDED."deaths",
+      "assists" = EXCLUDED."assists", "score" = EXCLUDED."score", "damage" = EXCLUDED."damage",
+      "headshots" = EXCLUDED."headshots", "bodyshots" = EXCLUDED."bodyshots",
+      "legshots" = EXCLUDED."legshots", "agentIcon" = EXCLUDED."agentIcon"`;
 }
 
 /**
@@ -95,6 +162,7 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
       httpStatus: upstream.status,
       contentType: upstream.contentType,
       body: upstream.body,
+      ...(upstream.retryAfterSeconds ? { retryAfterSeconds: upstream.retryAfterSeconds } : {}),
     };
   }
 
@@ -111,32 +179,21 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
     create: { puuid, name, tag },
   });
 
-  let matchesUpserted = 0;
-  let playerMatchesUpserted = 0;
-
+  const matchRows: MatchUpsert[] = [];
+  const lineRows: PlayerMatchUpsert[] = [];
   for (const m of matches) {
     const matchId = m.metadata?.matchid;
-    if (!matchId) continue;
-
-    const match = toMatchRecord(m, region);
-    await prisma.match.upsert({
-      where: { id: matchId },
-      update: match,
-      create: { id: matchId, ...match },
-    });
-    matchesUpserted++;
-
+    if (typeof matchId !== "string" || !matchId) continue;
+    matchRows.push({ id: matchId, ...toMatchRecord(m, region) });
     const p = m.players?.all_players?.find((x) => x.puuid === puuid);
-    if (!p) continue;
-
-    const line = toPlayerMatchRecord(p);
-    await prisma.playerMatch.upsert({
-      where: { matchId_playerId: { matchId, playerId: player.id } },
-      update: line,
-      create: { matchId, playerId: player.id, ...line },
-    });
-    playerMatchesUpserted++;
+    if (p) lineRows.push({ matchId, ...toPlayerMatchRecord(p) });
   }
+
+  // Two statements instead of one per row. No transaction around them: each is
+  // atomic, matches go first for the foreign key, and the cooldown is only armed
+  // below, once stats are rebuilt, so a failure here just means the next view retries.
+  const matchesUpserted = await upsertMatches(uniqueByKey(matchRows, (r) => r.id));
+  const playerMatchesUpserted = await upsertPlayerMatches(player.id, uniqueByKey(lineRows, (r) => r.matchId));
 
   // Rebuild the player's stats row and arm the cooldown in one commit. If this
   // throws, the sync fails and the cooldown stays off, so the next view retries.

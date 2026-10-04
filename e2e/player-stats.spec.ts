@@ -2,7 +2,7 @@ import { execSync, spawn } from "node:child_process";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
 import { lockPlayer } from "../src/services/player-lock";
-import { appEnv } from "./env.mjs";
+import { appEnv, MOCK_API_URL } from "./env.mjs";
 import { PLAYER } from "./fixtures.mjs";
 
 // These tests check the PlayerStats table directly in the test database, so they
@@ -42,6 +42,46 @@ test.beforeEach(async ({ page }) => {
 
 test("a sync stores the same stats the profile page shows", async () => {
   expect((await testPlayer()).stats).toMatchObject(FIXTURE_STATS);
+});
+
+test("match times are stored exactly, even when the database session isn't in UTC", async () => {
+  // e2e/serve.mjs sets the test database's time zone to America/Los_Angeles.
+  const [{ timezone }] = await db.$queryRaw<{ timezone: string }[]>`SELECT current_setting('TimeZone') AS timezone`;
+  expect(timezone).toBe("America/Los_Angeles");
+
+  const newest = await db.match.findUniqueOrThrow({ where: { id: "e2e-match-01" } });
+  expect(newest.startedAt?.toISOString()).toBe("2026-09-20T18:00:00.000Z");
+});
+
+test("teammates syncing the same matches at once never deadlock or double count", async ({ request }) => {
+  // Rival plays in every one of Tester's matches, so both syncs write the same Match rows.
+  // Rival's list comes in the opposite order, so unsorted batches would lock those rows
+  // in opposite orders, which is how two writers deadlock.
+  const rival = { name: "Rival", tag: "OPP", puuid: "e2e-puuid-rival" };
+  await fetch(`${MOCK_API_URL}/__script`, {
+    method: "POST",
+    body: JSON.stringify({ endpoint: "matches", name: rival.name, steps: [{ as: "Tester", reverse: true, times: 10 }] }),
+  });
+  try {
+    for (let round = 0; round < 5; round++) {
+      await db.player.updateMany({ where: { puuid: { in: [PLAYER.puuid, rival.puuid] } }, data: { lastSyncedAt: null } });
+      const responses = await Promise.all([
+        request.post("/api/sync?name=Tester&tag=E2E"),
+        request.post(`/api/sync?name=${rival.name}&tag=${rival.tag}`),
+      ]);
+      for (const res of responses) expect(res.status(), `round ${round + 1}: ${await res.text()}`).toBe(200);
+    }
+
+    expect(await db.match.count({ where: { id: { startsWith: "e2e-match-" } } })).toBe(10);
+    for (const puuid of [PLAYER.puuid, rival.puuid]) {
+      const player = await db.player.findUniqueOrThrow({ where: { puuid } });
+      expect(await db.playerMatch.count({ where: { playerId: player.id } })).toBe(10);
+    }
+  } finally {
+    // Leave the other specs only the fixture players they expect.
+    await db.player.deleteMany({ where: { puuid: rival.puuid } });
+    await fetch(`${MOCK_API_URL}/__reset`, { method: "POST" });
+  }
 });
 
 test("re-syncing matches that are already stored changes nothing but the timestamp", async ({ request }) => {

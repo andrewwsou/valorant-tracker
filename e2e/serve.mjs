@@ -14,6 +14,14 @@ const env = { ...process.env, ...appEnv };
 // Creates the test database on first run and applies any pending migrations.
 execSync("npx prisma migrate deploy", { env, stdio: "inherit" });
 
+// Runs the app's database sessions in a time zone other than UTC, so a timestamp
+// that isn't stored as UTC shows up as hours off in the tests instead of hiding.
+execSync("npx prisma db execute --stdin --schema prisma/schema.prisma", {
+  env,
+  input: `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET timezone TO %L', current_database(), 'America/Los_Angeles'); END $$;`,
+  stdio: ["pipe", "inherit", "inherit"],
+});
+
 const children = [
   spawn(process.execPath, ["e2e/mock-henrik.mjs"], { env, stdio: "inherit" }),
   spawn(process.execPath, [require.resolve("next/dist/bin/next"), "start", "-p", String(APP_PORT)], {

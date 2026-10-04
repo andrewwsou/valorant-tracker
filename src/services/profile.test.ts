@@ -112,6 +112,34 @@ describe("getPlayerProfile", () => {
     await expect(getPlayerProfile(id)).resolves.toMatchObject({ errors: ["Couldn't sync recent matches (HTTP 429)"] });
   });
 
+  it("explains a pause once, with the longest wait, however many parts were paused", async () => {
+    // The longest wait is on neither the first nor the last part checked.
+    vi.mocked(getMmr).mockResolvedValue({ ...failed(429), retryAfterSeconds: 25 });
+    vi.mocked(getMmrHistory).mockResolvedValue({ ...failed(429), retryAfterSeconds: 20 });
+    vi.mocked(syncPlayer).mockResolvedValue({
+      status: "upstream-error",
+      httpStatus: 429,
+      contentType: "application/json",
+      body: "{}",
+      retryAfterSeconds: 10,
+    });
+
+    const { errors } = await getPlayerProfile(id);
+
+    expect(errors.filter((e) => e.includes("paused"))).toEqual([
+      "Live data is paused for about 25s to stay under the HenrikDev rate limit.",
+    ]);
+    expect(errors).toContain("Couldn't load current rank (HTTP 429)");
+  });
+
+  it("says HenrikDev looks down when the pause is an outage", async () => {
+    vi.mocked(getAccount).mockResolvedValue({ ...failed(503), retryAfterSeconds: 30 });
+
+    const { errors } = await getPlayerProfile(id);
+
+    expect(errors).toContain("HenrikDev looks unavailable. Live data will be retried in about 30s.");
+  });
+
   it("reports a failed match list without throwing", async () => {
     vi.mocked(getRecentMatches).mockRejectedValue(new Error("database down"));
 

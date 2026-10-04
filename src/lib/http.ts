@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { CachedUpstreamResponse } from "@/lib/henrik";
 import { msSince } from "@/lib/metrics";
 
-/** Returns an upstream response unchanged, adding cache and timing headers. */
+/** Returns an upstream response unchanged, adding cache and timing headers, and Retry-After when it applies. */
 export function passThrough(res: CachedUpstreamResponse, t0: number) {
   return new NextResponse(res.body, {
     status: res.status,
@@ -11,6 +11,7 @@ export function passThrough(res: CachedUpstreamResponse, t0: number) {
       "cache-control": "no-store",
       "x-cache": res.cache,
       "x-response-ms": String(msSince(t0)),
+      ...(res.retryAfterSeconds ? { "retry-after": String(res.retryAfterSeconds) } : {}),
     },
   });
 }

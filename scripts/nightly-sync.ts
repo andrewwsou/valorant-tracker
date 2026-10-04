@@ -13,6 +13,13 @@ function parsePlayers(): Player[] {
     .filter((p) => p.name && p.tag);
 }
 
+/** Retries per player when the app says to wait (a 429 or 503 with Retry-After). */
+const MAX_WAITS = 2;
+/** Longer waits than this aren't worth holding the job for; that player is skipped. */
+const MAX_WAIT_SECONDS = 120;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function runOne(p: Player) {
   const url = new URL(`${BASE_URL}/api/sync`);
   url.searchParams.set("region", REGION);
@@ -20,10 +27,19 @@ async function runOne(p: Player) {
   url.searchParams.set("tag", p.tag);
   url.searchParams.set("size", SIZE);
 
-  const r = await fetch(url.toString(), { method: "POST" });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`${p.name}#${p.tag} failed: ${r.status} ${text}`);
-  return `${p.name}#${p.tag}: ${text}`;
+  for (let waits = 0; ; waits++) {
+    const r = await fetch(url.toString(), { method: "POST" });
+    const text = await r.text();
+    if (r.ok) return `${p.name}#${p.tag}: ${text}`;
+
+    // The app already retried anything worth retrying. It only says "wait" when the
+    // rate limit is spent or HenrikDev is down, so wait as asked, plus some jitter.
+    const retryAfter = Number(r.headers.get("retry-after"));
+    const canWait = (r.status === 429 || r.status === 503) && retryAfter > 0 && retryAfter <= MAX_WAIT_SECONDS;
+    if (!canWait || waits >= MAX_WAITS) throw new Error(`${p.name}#${p.tag} failed: ${r.status} ${text}`);
+    console.log(`${p.name}#${p.tag}: HTTP ${r.status}, waiting ${retryAfter}s as asked`);
+    await sleep(retryAfter * 1000 + Math.random() * 2000);
+  }
 }
 
 async function main() {
