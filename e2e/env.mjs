@@ -6,6 +6,10 @@ export const MOCK_API_PORT = 4010;
 export const APP_URL = `http://localhost:${APP_PORT}`;
 export const MOCK_API_URL = `http://localhost:${MOCK_API_PORT}`;
 export const TEST_API_KEY = "e2e-test-key";
+/** The sync secret the app under test expects. Test-only: 64 characters, like `openssl rand -hex 32`. */
+export const TEST_CRON_SECRET = "e2e-cron-secret-".padEnd(64, "0");
+/** Headers that let a test call POST /api/sync, the way the nightly job does. */
+export const SYNC_AUTH = { authorization: `Bearer ${TEST_CRON_SECRET}` };
 
 /** Environment for the app under test. It overrides anything in .env files. */
 export const appEnv = {
@@ -16,6 +20,7 @@ export const appEnv = {
   UPSTASH_REDIS_REST_TOKEN: process.env.E2E_REDIS_REST_TOKEN ?? "local-dev-token",
   HENRIKDEV_API_KEY: TEST_API_KEY,
   HENRIKDEV_BASE_URL: `${MOCK_API_URL}/valorant`,
+  CRON_SECRET: TEST_CRON_SECRET,
   // Telemetry stays off during tests.
   OTEL_EXPORTER_OTLP_ENDPOINT: "",
 };

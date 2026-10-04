@@ -2,7 +2,7 @@ import { execSync, spawn } from "node:child_process";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
 import { lockPlayer } from "../src/services/player-lock";
-import { appEnv, MOCK_API_URL } from "./env.mjs";
+import { appEnv, MOCK_API_URL, SYNC_AUTH } from "./env.mjs";
 import { PLAYER } from "./fixtures.mjs";
 
 // These tests check the PlayerStats table directly in the test database, so they
@@ -31,7 +31,7 @@ const testPlayer = () => db.player.findUniqueOrThrow({ where: { puuid: PLAYER.pu
 /** Clears the cooldown, then syncs the test player through the API. */
 async function syncNow(request: APIRequestContext) {
   await db.player.update({ where: { puuid: PLAYER.puuid }, data: { lastSyncedAt: null } });
-  return request.post("/api/sync?name=Tester&tag=E2E");
+  return request.post("/api/sync?name=Tester&tag=E2E", { headers: SYNC_AUTH });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -66,8 +66,8 @@ test("teammates syncing the same matches at once never deadlock or double count"
     for (let round = 0; round < 5; round++) {
       await db.player.updateMany({ where: { puuid: { in: [PLAYER.puuid, rival.puuid] } }, data: { lastSyncedAt: null } });
       const responses = await Promise.all([
-        request.post("/api/sync?name=Tester&tag=E2E"),
-        request.post(`/api/sync?name=${rival.name}&tag=${rival.tag}`),
+        request.post("/api/sync?name=Tester&tag=E2E", { headers: SYNC_AUTH }),
+        request.post(`/api/sync?name=${rival.name}&tag=${rival.tag}`, { headers: SYNC_AUTH }),
       ]);
       for (const res of responses) expect(res.status(), `round ${round + 1}: ${await res.text()}`).toBe(200);
     }
@@ -100,7 +100,7 @@ test("concurrent syncs of one player neither fail nor double count", async ({ re
   await db.player.update({ where: { puuid: PLAYER.puuid }, data: { lastSyncedAt: null } });
 
   const responses = await Promise.all(
-    Array.from({ length: 3 }, () => request.post("/api/sync?name=Tester&tag=E2E")),
+    Array.from({ length: 3 }, () => request.post("/api/sync?name=Tester&tag=E2E", { headers: SYNC_AUTH })),
   );
 
   for (const res of responses) expect(res.status(), await res.text()).toBe(200);

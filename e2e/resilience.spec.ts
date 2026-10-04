@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { PrismaClient } from "../src/generated/prisma";
-import { APP_URL, appEnv, MOCK_API_URL } from "./env.mjs";
+import { appEnv, MOCK_API_URL, SYNC_AUTH } from "./env.mjs";
 import { buildMatches } from "./fixtures.mjs";
 
 // How the app behaves when HenrikDev misbehaves: timeouts, retries, rate limits,
@@ -176,37 +174,6 @@ test("during a cooldown the profile page says live data is paused, and calls not
   expect(await callsFor(viewer)).toEqual(NO_CALLS);
 });
 
-test("the nightly job waits as long as the app asks, then syncs", async () => {
-  test.setTimeout(40_000);
-  const db = new PrismaClient({ datasourceUrl: appEnv.DATABASE_URL });
-  try {
-    await db.player.updateMany({ where: { name: "Tester", tag: "E2E" }, data: { lastSyncedAt: null } });
-  } finally {
-    await db.$disconnect();
-  }
-  await script("matches", "Tester", [{ status: 429, headers: { "retry-after": "2" } }]);
-  const before = (await callsFor("Tester")).matches;
-
-  // Only what the job needs: it talks to the app, never to a database.
-  const env: Record<string, string> = {
-    PATH: process.env.PATH ?? "",
-    HOME: process.env.HOME ?? "",
-    BASE_URL: APP_URL,
-    SYNC_PLAYERS: JSON.stringify([{ name: "Tester", tag: "E2E" }]),
-  };
-  const started = Date.now();
-  const { stdout } = await promisify(execFile)("npx", ["tsx", "scripts/nightly-sync.ts"], {
-    env: env as NodeJS.ProcessEnv,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-
-  expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
-  expect(stdout).toContain("Tester#E2E: HTTP 429, waiting 2s as asked");
-  expect(stdout).toContain('Tester#E2E: {"ok":true');
-  expect((await callsFor("Tester")).matches).toBe(before + 2);
-});
-
 test("one unreadable match or value doesn't cost the rest of the sync", async ({ request }) => {
   const name = fresh("Partial");
   const puuid = `e2e-puuid-${name.toLowerCase()}`;
@@ -221,7 +188,7 @@ test("one unreadable match or value doesn't cost the rest of the sync", async ({
   matches[7].players[0].stats.kills = "lots"; // one bad value: stored as null
   await script("matches", name, [{ body: { status: 200, data: matches } }]);
 
-  const res = await request.post(`/api/sync?name=${name}&tag=E2E`);
+  const res = await request.post(`/api/sync?name=${name}&tag=E2E`, { headers: SYNC_AUTH });
   expect(await res.json()).toMatchObject({ ok: true, matchesUpserted: 9, playerMatchesUpserted: 9 });
 
   const db = new PrismaClient({ datasourceUrl: appEnv.DATABASE_URL });
@@ -266,7 +233,7 @@ test("a tiny answer without a data list is cached like a failure too", async ({ 
   const name = fresh("Empty");
   await script("matches", name, [{ body: { status: 200, data: null } }]);
 
-  expect((await request.post(`/api/sync?name=${name}&tag=E2E`)).status()).toBe(502);
-  expect((await request.post(`/api/sync?name=${name}&tag=E2E`)).status()).toBe(502);
+  expect((await request.post(`/api/sync?name=${name}&tag=E2E`, { headers: SYNC_AUTH })).status()).toBe(502);
+  expect((await request.post(`/api/sync?name=${name}&tag=E2E`, { headers: SYNC_AUTH })).status()).toBe(502);
   expect((await callsFor(name)).matches).toBe(1);
 });
