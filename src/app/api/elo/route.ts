@@ -1,70 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
-import { cacheGetJson, cacheSetJson } from "@/lib/redis";
+import type { NextRequest } from "next/server";
+import { getMmrHistory } from "@/lib/henrik";
+import { jsonError, passThrough } from "@/lib/http";
+import { nowMs } from "@/lib/metrics";
+import { parseRiotId } from "@/lib/riot-id";
 
 export const dynamic = "force-dynamic";
-const enc = encodeURIComponent;
 
-type CachedResp = { status: number; contentType: string; body: string };
-
+/** Rank change for each recent competitive match. Cached in Redis; see CACHE_TTL_SECONDS. */
 export async function GET(req: NextRequest) {
+  const t0 = nowMs();
+  const id = parseRiotId(req.nextUrl.searchParams);
+  if (!id.ok) return jsonError(400, id.error);
+
   try {
-    const { searchParams } = new URL(req.url);
-
-    const region = (searchParams.get("region") ?? "na").trim();
-    const name = (searchParams.get("name") ?? "").trim();
-    const tag = (searchParams.get("tag") ?? "").trim();
-
-    if (!name || !tag) {
-      return NextResponse.json({ error: "Missing name or tag" }, { status: 400 });
-    }
-
-    const key = `elo:v1:${region}:${name.toLowerCase()}:${tag.toLowerCase()}`;
-
-    try {
-      const cached = await cacheGetJson<CachedResp>(key);
-      if (cached) {
-        return new NextResponse(cached.body, {
-          status: cached.status,
-          headers: {
-            "content-type": cached.contentType,
-            "cache-control": "no-store",
-            "x-cache": "HIT",
-          },
-        });
-      }
-    } catch (e) {
-      console.warn("[redis] elo cache get failed:", e);
-    }
-
-    const api_call =
-      `https://api.henrikdev.xyz/valorant/v1/mmr-history/` +
-      `${region}/${enc(name)}/${enc(tag)}`;
-
-    const r = await fetch(api_call, {
-      headers: { Authorization: process.env.HENRIKDEV_API_KEY as string },
-      cache: "no-store",
-    });
-
-    const text = await r.text();
-    const contentType = r.headers.get("content-type") ?? "application/json";
-
-    const payload: CachedResp = { status: r.status, contentType, body: text };
-
-    try {
-      if (r.ok) await cacheSetJson(key, payload, 60);
-    } catch (e) {
-      console.warn("[redis] elo cache set failed:", e);
-    }
-
-    return new NextResponse(text, {
-      status: r.status,
-      headers: {
-        "content-type": contentType,
-        "cache-control": "no-store",
-        "x-cache": "MISS",
-      },
-    });
-  } catch {
-    return NextResponse.json({ error: "Unexpected server error" }, { status: 500 });
+    return passThrough(await getMmrHistory(id.value.region, id.value.name, id.value.tag), t0);
+  } catch (e) {
+    console.error("[api/elo]", e);
+    return jsonError(500, "Unexpected server error");
   }
 }
