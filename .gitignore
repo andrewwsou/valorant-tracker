@@ -42,3 +42,9 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# end-to-end and load test output
+/test-results
+/playwright-report
+/blob-report
+/load/summary.json

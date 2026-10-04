@@ -104,3 +104,75 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down --volumes
+
+  e2e:
+    name: End-to-end and load tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Compose needs a value to read its file. These tests use the mock API, never the real one.
+      HENRIKDEV_API_KEY: ci-placeholder
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start Postgres and the Redis REST proxy
+        run: docker compose up --detach --wait db cache
+
+      - name: Production build
+        run: npm run build
+
+      - name: Start the mock API and the app
+        run: |
+          npm run e2e:serve > e2e-server.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl --silent --fail http://localhost:3100/api/health > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "The test server never became healthy."
+          cat e2e-server.log
+          exit 1
+
+      - name: End-to-end tests (Playwright, using the runner's Google Chrome)
+        run: npx playwright test
+
+      - name: Upload the Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Load test (k6, fails if p95 goes over 250 ms)
+        run: |
+          docker run --rm --network host --user "$(id -u):$(id -g)" \
+            -v "$PWD/load:/load" -e BASE_URL=http://localhost:3100 \
+            grafana/k6:2.3.0 run --summary-export /load/summary.json /load/profile-load.js
+
+      - name: Record load test results
+        if: ${{ !cancelled() }}
+        run: |
+          [ -f load/summary.json ] || exit 0
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          m = json.load(open("load/summary.json"))["metrics"]
+          d = m.get("http_req_duration{page:profile}") or m["http_req_duration"]
+          print("### Load test: cached profile page")
+          print("| Requests | Rate | Failed | p50 | p95 | Max |")
+          print("|---|---|---|---|---|---|")
+          print(f"| {int(m['http_reqs']['count'])} | {m['http_reqs']['rate']:.1f}/s | {m['http_req_failed']['value']:.2%} "
+                f"| {d['med']:.1f} ms | {d['p(95)']:.1f} ms | {d['max']:.1f} ms |")
+          PY
+
+      - name: Show server logs
+        if: failure()
+        run: cat e2e-server.log

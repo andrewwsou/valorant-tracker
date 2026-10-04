@@ -14,3 +14,8 @@ coverage
 Dockerfile
 docker-compose.yml
 .dockerignore
+e2e
+load
+playwright.config.ts
+test-results
+playwright-report

@@ -15,7 +15,8 @@ import {
   withSpan,
 } from "@/lib/telemetry";
 
-const BASE_URL = "https://api.henrikdev.xyz/valorant";
+/** Overridable so end-to-end and load tests can point the app at a mock API. */
+const BASE_URL = process.env.HENRIKDEV_BASE_URL ?? "https://api.henrikdev.xyz/valorant";
 
 /** How long each kind of upstream data may be served from the cache. */
 export const CACHE_TTL_SECONDS = {

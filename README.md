@@ -13,10 +13,10 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 - **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
 - **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
-- **Tested core logic.** 58 Vitest unit tests cover the stat math, sync, caching, tracing, and input parsing, with the database and APIs mocked.
+- **Tested at three levels.** 58 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if p95 latency passes 250 ms at 20 requests per second; locally the cached profile page held a 20 ms p95 at 100 requests per second.
 - **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
-- **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
+- **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, the end-to-end and load tests, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
 - **Nightly sync** through a scheduled GitHub Actions workflow.
 
 ## Architecture
@@ -116,6 +116,28 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `npm run typecheck` | TypeScript type check |
 | `npm test` | Unit tests with Vitest |
 | `npm run test:coverage` | Unit tests with a coverage report |
+| `npm run test:e2e` | End-to-end tests with Playwright |
+| `npm run e2e:serve` | Starts the mock API and the app on port 3100 for the end-to-end and load tests |
+| `npm run test:load` | k6 load test against `e2e:serve`, run through Docker |
+
+## Testing
+
+| Level | Tool | What it covers |
+|---|---|---|
+| Unit | Vitest | Stat math, sync, caching, tracing, and input parsing. The database, cache, and `fetch` are mocked, so the suite runs in under a second |
+| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build |
+| Load | k6 | 20 requests per second for 30 seconds against the cached profile page. Fails if p95 passes 250 ms or more than 1% of requests fail |
+
+The end-to-end and load tests use a mock of the HenrikDev API (`e2e/mock-henrik.mjs`), so they are deterministic and never spend the real API's rate limit. They also use their own `valorant_e2e` database.
+
+```bash
+docker compose up -d db cache
+npm run build
+npm run test:e2e
+```
+
+For the load test, start `npm run e2e:serve` in one terminal and run `npm run test:load` in another.
+
 
 ## Configuration
 
@@ -125,6 +147,7 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `UPSTASH_REDIS_REST_URL` | yes | Redis REST endpoint: Upstash, or the local proxy |
 | `UPSTASH_REDIS_REST_TOKEN` | yes | Token for that endpoint |
 | `HENRIKDEV_API_KEY` | yes | HenrikDev API key |
+| `HENRIKDEV_BASE_URL` | no | Base URL of the HenrikDev API. Tests point it at a mock |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Where to send traces and metrics. Telemetry is off when it's unset |
 | `OTEL_EXPORTER_OTLP_HEADERS` | no | Auth headers for a hosted OTLP backend |
 | `OTEL_SERVICE_NAME` | no | Service name on traces and metrics. Defaults to `valorant-stattrack` |
@@ -165,6 +188,8 @@ src/
     riot-id.ts             input parsing and region allowlist
     telemetry.ts           spans and custom metrics
 observability/             Grafana dashboard and provisioning
+e2e/                       Playwright tests, the mock HenrikDev API, and its test data
+load/                      k6 load test
 prisma/                    schema and migrations
 scripts/nightly-sync.ts    nightly ingestion job
 ```
@@ -175,7 +200,7 @@ Unit tests sit next to the code they cover, as `*.test.ts`.
 
 - [x] Unit tests with Vitest
 - [x] CI on every pull request and push to main
-- [ ] End-to-end and load tests
+- [x] End-to-end and load tests
 - [x] OpenTelemetry traces, metrics, and a Grafana dashboard
 - [ ] Leaderboard backed by precomputed aggregates
 - [ ] MCP server so AI agents can query player stats
