@@ -1,3 +1,4 @@
+import type { Prisma } from "@/generated/prisma";
 import { prisma } from "@/lib/prisma";
 import { withSpan } from "@/lib/telemetry";
 import { RECENT_MATCH_WINDOW } from "@/services/stats";
@@ -73,10 +74,14 @@ export type LeaderboardEntry = {
  * One indexed query on PlayerStats, plus one primary-key lookup that Prisma makes
  * for the players' names. Ordering by (stat DESC, playerId) matches the table's
  * indexes, and playerId keeps the order stable between requests.
+ * `db` can be a transaction client, such as the MCP server's read-only one.
  */
-export function getLeaderboard(query: LeaderboardQuery): Promise<LeaderboardEntry[]> {
+export function getLeaderboard(
+  query: LeaderboardQuery,
+  db: Prisma.TransactionClient = prisma,
+): Promise<LeaderboardEntry[]> {
   return withSpan("leaderboard.load", { "leaderboard.sort": query.sort }, async (span) => {
-    const rows = await prisma.playerStats.findMany({
+    const rows = await db.playerStats.findMany({
       where: { matches: { gte: query.minMatches } },
       orderBy: [{ [query.sort]: "desc" }, { playerId: "asc" }],
       take: query.limit,
