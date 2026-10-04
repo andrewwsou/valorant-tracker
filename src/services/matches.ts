@@ -1,28 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { cacheDelete, cacheGetJson, cacheSetJson } from "@/lib/redis";
 import { cacheLookups, withSpan } from "@/lib/telemetry";
+import { findRecentMatchRows, type MatchRow } from "@/services/match-rows";
 
-/** One player's line from one match: the read model behind the match table and all stats. */
-export type MatchRow = {
-  matchId: string;
-  map: string | null;
-  mode: string | null;
-  region: string | null;
-  /** ISO 8601 timestamp. */
-  startedAt: string | null;
-  roundsRed: number | null;
-  roundsBlue: number | null;
-  team: string | null;
-  kills: number | null;
-  deaths: number | null;
-  assists: number | null;
-  score: number | null;
-  damage: number | null;
-  headshots: number | null;
-  bodyshots: number | null;
-  legshots: number | null;
-  agentIcon: string | null;
-};
+export type { MatchRow } from "@/services/match-rows";
 
 export type RecentMatches = {
   player: { id: string; name: string; tag: string; puuid: string | null } | null;
@@ -87,32 +68,7 @@ export async function getRecentMatches(
       return { cache: "MISS" as const, ...payload };
     }
 
-    const rows = await prisma.playerMatch.findMany({
-      where: { playerId: player.id },
-      include: { match: true },
-      orderBy: { match: { startedAt: "desc" } },
-      take: limit,
-    });
-
-    const data: MatchRow[] = rows.map((pm) => ({
-      matchId: pm.matchId,
-      map: pm.match.map,
-      mode: pm.match.mode,
-      region: pm.match.region,
-      startedAt: pm.match.startedAt ? pm.match.startedAt.toISOString() : null,
-      roundsRed: pm.match.roundsRed,
-      roundsBlue: pm.match.roundsBlue,
-      team: pm.team,
-      kills: pm.kills,
-      deaths: pm.deaths,
-      assists: pm.assists,
-      score: pm.score,
-      damage: pm.damage,
-      headshots: pm.headshots,
-      bodyshots: pm.bodyshots,
-      legshots: pm.legshots,
-      agentIcon: pm.agentIcon,
-    }));
+    const data = await findRecentMatchRows(prisma, player.id, limit);
 
     span.setAttribute("matches.count", data.length);
     const payload: RecentMatches = { player, data };

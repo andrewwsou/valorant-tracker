@@ -9,11 +9,13 @@ vi.mock("@/lib/prisma", () => ({
 }));
 vi.mock("@/lib/henrik", () => ({ getMatches: vi.fn() }));
 vi.mock("@/services/matches", () => ({ invalidateRecentMatches: vi.fn() }));
+vi.mock("@/services/player-stats", () => ({ refreshPlayerStats: vi.fn() }));
 
 import { getMatches, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik";
 import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
 import { invalidateRecentMatches } from "@/services/matches";
+import { refreshPlayerStats } from "@/services/player-stats";
 import {
   findPlayerByRiotId,
   SYNC_COOLDOWN_MS,
@@ -133,7 +135,10 @@ describe("syncPlayer", () => {
     expect(db.playerMatch.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ where: { matchId_playerId: { matchId: "m1", playerId: "player-1" } } }),
     );
-    expect(db.player.update).toHaveBeenCalledWith({ where: { id: "player-1" }, data: { lastSyncedAt: expect.any(Date) } });
+    // Stats are rebuilt, and the cooldown armed, only after the last stat line is written.
+    expect(refreshPlayerStats).toHaveBeenCalledExactlyOnceWith("player-1", { syncedAt: expect.any(Date) });
+    const lastLineWrite = Math.max(...db.playerMatch.upsert.mock.invocationCallOrder);
+    expect(vi.mocked(refreshPlayerStats).mock.invocationCallOrder[0]).toBeGreaterThan(lastLineWrite);
     expect(invalidateRecentMatches).toHaveBeenCalledWith("Enzo", "YYY");
   });
 
@@ -157,6 +162,25 @@ describe("syncPlayer", () => {
     vi.mocked(getMatches).mockResolvedValue(upstreamMatches([]));
 
     await expect(syncPlayer(id)).resolves.toEqual({ status: "no-matches" });
+  });
+
+  it("doesn't rebuild stats when nothing was written", async () => {
+    db.player.findUnique.mockResolvedValueOnce({ lastSyncedAt: new Date() });
+    await syncPlayer(id); // skipped by the cooldown
+    vi.mocked(getMatches).mockResolvedValue({ status: 404, contentType: "application/json", body: "{}" });
+    await syncPlayer(id); // upstream error
+    vi.mocked(getMatches).mockResolvedValue(upstreamMatches([]));
+    await syncPlayer(id); // no matches
+
+    expect(refreshPlayerStats).not.toHaveBeenCalled();
+  });
+
+  it("fails, and leaves the cooldown off, when the stats rebuild fails", async () => {
+    vi.mocked(refreshPlayerStats).mockRejectedValue(new Error("database down"));
+
+    await expect(syncPlayer(id)).rejects.toThrow("database down");
+    expect(db.player.update).not.toHaveBeenCalled();
+    expect(invalidateRecentMatches).not.toHaveBeenCalled();
   });
 
   it("still succeeds when clearing the cache fails", async () => {

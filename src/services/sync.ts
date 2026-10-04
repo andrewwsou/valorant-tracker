@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
 import { syncRuns, withSpan } from "@/lib/telemetry";
 import { invalidateRecentMatches } from "@/services/matches";
+import { refreshPlayerStats } from "@/services/player-stats";
 
 /** Minimum time between two syncs of the same player, to protect the upstream rate limit. */
 export const SYNC_COOLDOWN_MS = 5 * 60_000;
@@ -137,10 +138,9 @@ async function runSync(id: RiotId, size: number): Promise<SyncResult> {
     playerMatchesUpserted++;
   }
 
-  await prisma.player.update({
-    where: { id: player.id },
-    data: { lastSyncedAt: new Date() },
-  });
+  // Rebuild the player's stats row and arm the cooldown in one commit. If this
+  // throws, the sync fails and the cooldown stays off, so the next view retries.
+  await refreshPlayerStats(player.id, { syncedAt: new Date() });
 
   try {
     await invalidateRecentMatches(name, tag);

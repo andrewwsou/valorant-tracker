@@ -39,6 +39,7 @@ model Player {
   lastSyncedAt DateTime?
 
   matches PlayerMatch[]
+  stats   PlayerStats?
 
   @@unique([name, tag])
 }
@@ -67,4 +68,40 @@ model PlayerMatch {
   @@unique([matchId, playerId])
   @@index([playerId])
   @@index([matchId])
+}
+
+/// One row per player: stats over their 10 most recent stored matches, the same
+/// window and formulas as the profile page. Rebuilt from PlayerMatch by
+/// refreshPlayerStats() after every sync, never incremented, so re-running a sync
+/// can't double count. The leaderboard reads this table instead of every match row.
+model PlayerStats {
+  playerId String @id
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  // Window of the most recent matches (at most 10)
+  matches Int
+  wins    Int
+  losses  Int
+  draws   Int
+
+  // Unrounded, so sorting is exact. The UI rounds for display.
+  kd          Float // kills / max(1, deaths)
+  acs         Float // combat score per round
+  adr         Float // damage per round
+  winRate     Float // percent of decided matches won; draws excluded
+  headshotPct Float // headshots / all shots, percent
+
+  trackerScore Int // 0 to 100, same formula as the profile
+
+  // Beyond the window: lets the leaderboard filter by sample size and activity
+  totalMatches Int
+  lastMatchAt  DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  // Each index matches the leaderboard's ORDER BY exactly: <stat> DESC, playerId ASC.
+  @@index([trackerScore(sort: Desc), playerId])
+  @@index([acs(sort: Desc), playerId])
+  @@index([kd(sort: Desc), playerId])
+  @@index([winRate(sort: Desc), playerId])
 }

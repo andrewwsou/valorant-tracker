@@ -11,6 +11,7 @@ import { msSince, nowMs } from "@/lib/metrics";
 import type { RiotId } from "@/lib/riot-id";
 import { profileDuration, withSpan } from "@/lib/telemetry";
 import { getRecentMatches, type MatchRow } from "@/services/matches";
+import { RECENT_MATCH_WINDOW as MATCH_LIMIT } from "@/services/stats";
 import { syncPlayer } from "@/services/sync";
 
 /** Everything the player page shows. */
@@ -24,7 +25,6 @@ export type PlayerProfile = {
   errors: string[];
 };
 
-const MATCH_LIMIT = 10;
 
 /**
  * Loads a player's profile.
