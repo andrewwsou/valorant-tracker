@@ -1,3 +1,12 @@
+# Full local stack: Postgres, Redis, the app, and a one-off migration job.
+#
+#   docker compose up --build        run everything at http://localhost:3000
+#   docker compose up -d db cache    run only the backing services for `npm run dev`
+#
+# In production the app reaches Redis through Upstash's REST API. Locally it goes
+# through serverless-redis-http (SRH), which speaks the same protocol in front of
+# a plain Redis, so the app runs the same cache code in both places.
+
 services:
   db:
     image: postgres:16-alpine
@@ -6,34 +15,67 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: valorant
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5433:5432" # 5433 on the host avoids clashing with a local Postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d valorant"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cache:
+    # Upstash-compatible REST proxy in front of the local Redis.
+    image: hiett/serverless-redis-http:0.0.10
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: local-dev-token
+      SRH_CONNECTION_STRING: redis://redis:6379
+    ports:
+      - "127.0.0.1:8079:80"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  migrate:
+    # Applies pending Prisma migrations, then exits. The app waits for it.
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/valorant?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
 
   web:
-    build: .
-    depends_on:
-      - db
-      - redis
-    ports:
-      - "3000:3000"
-      - "5555:5555"
+    build:
+      context: .
+      target: runner
     environment:
-      NODE_ENV: development
       DATABASE_URL: postgresql://postgres:postgres@db:5432/valorant?schema=public
-      REDIS_URL: redis://redis:6379
-      HENRIKDEV_API_KEY: ${HENRIKDEV_API_KEY}
-      NEXT_PUBLIC_BASE_URL: http://localhost:3000
-    volumes:
-      - .:/app
-      - /app/node_modules
+      UPSTASH_REDIS_REST_URL: http://cache:80
+      UPSTASH_REDIS_REST_TOKEN: local-dev-token
+      HENRIKDEV_API_KEY: ${HENRIKDEV_API_KEY:?Set HENRIKDEV_API_KEY in your shell or in .env}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:
