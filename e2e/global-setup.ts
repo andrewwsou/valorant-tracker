@@ -4,11 +4,12 @@ import { appEnv } from "./env.mjs";
 
 /** Gives every test run a migrated, empty test database and an empty cache. */
 export default async function globalSetup() {
-  execSync("npx prisma migrate deploy", { env: { ...process.env, ...appEnv }, stdio: "ignore" });
+  const env = { ...process.env, ...appEnv };
+  execSync("npx prisma migrate deploy", { env, stdio: "ignore" });
 
   const prisma = new PrismaClient({ datasourceUrl: appEnv.DATABASE_URL });
   try {
-    await prisma.$executeRawUnsafe('TRUNCATE "PlayerMatch", "Match", "Player"');
+    await prisma.$executeRawUnsafe('TRUNCATE "PlayerStats", "PlayerMatch", "Match", "Player"');
   } finally {
     await prisma.$disconnect();
   }
@@ -19,4 +20,7 @@ export default async function globalSetup() {
     body: JSON.stringify(["FLUSHDB"]),
   });
   if (!res.ok) throw new Error(`Could not clear the cache: HTTP ${res.status} ${await res.text()}`);
+
+  // Proves the backfill script still runs. On an empty database it does nothing.
+  execSync("npx tsx scripts/backfill-player-stats.ts", { env, stdio: "ignore" });
 }

@@ -6,6 +6,24 @@ import type { MatchRow } from "@/services/matches";
 
 export type MatchResult = "W" | "L" | "D" | "-";
 
+/** How many recent matches the profile and the stored player stats are computed over. */
+export const RECENT_MATCH_WINDOW = 10;
+
+/** Raw sums over rows. Every ratio below is built from these, so the formulas live in one place. */
+export function sumMatchRows(rows: MatchRow[]) {
+  const totals = { kills: 0, deaths: 0, score: 0, damage: 0, rounds: 0, headshots: 0, shots: 0 };
+  for (const r of rows) {
+    totals.kills += r.kills ?? 0;
+    totals.deaths += r.deaths ?? 0;
+    totals.score += r.score ?? 0;
+    totals.damage += r.damage ?? 0;
+    totals.rounds += (r.roundsRed ?? 0) + (r.roundsBlue ?? 0);
+    totals.headshots += r.headshots ?? 0;
+    totals.shots += (r.headshots ?? 0) + (r.bodyshots ?? 0) + (r.legshots ?? 0);
+  }
+  return totals;
+}
+
 /** Win, loss, or draw from the player's side, or "-" when the score or team is missing. */
 export function matchResult(row: MatchRow): MatchResult {
   const team = row.team?.toLowerCase();
@@ -39,29 +57,23 @@ export function matchStats(row: MatchRow) {
 
 /** Kills divided by deaths over all rows. Zero deaths counts as one, like most trackers. */
 export function kdRatio(rows: MatchRow[]): string {
-  let kills = 0;
-  let deaths = 0;
-  for (const r of rows) {
-    kills += r.kills ?? 0;
-    deaths += r.deaths ?? 0;
-  }
+  const { kills, deaths } = sumMatchRows(rows);
   return (kills / Math.max(1, deaths)).toFixed(2);
 }
 
 /** Combat score and damage per round, averaged over every round played. */
 export function averageCombatStats(rows: MatchRow[]): { acs: number; adr: number } {
-  let score = 0;
-  let damage = 0;
-  let rounds = 0;
-  for (const r of rows) {
-    score += r.score ?? 0;
-    damage += r.damage ?? 0;
-    rounds += (r.roundsRed ?? 0) + (r.roundsBlue ?? 0);
-  }
+  const { score, damage, rounds } = sumMatchRows(rows);
   return {
     acs: rounds ? Math.round(score / rounds) : 0,
     adr: rounds ? Math.round(damage / rounds) : 0,
   };
+}
+
+/** Headshots as a percent of all shots, summed across matches (not an average of per-match percents). */
+export function headshotPercent(rows: MatchRow[]): number {
+  const { headshots, shots } = sumMatchRows(rows);
+  return shots ? Math.round((headshots / shots) * 100) : 0;
 }
 
 /** Wins, losses, and draws. Draws are left out of the win rate. */
@@ -124,4 +136,31 @@ export function trackerScore(rows: MatchRow[], n = 10): number {
 
   const avg = sum / slice.length;
   return Math.max(0, Math.min(100, Math.round(avg * 100)));
+}
+
+/**
+ * Everything stored in a PlayerStats row, computed from a player's newest rows.
+ *
+ * Ratios stay unrounded so the leaderboard sorts exactly. Rounding them the way
+ * the profile does (Math.round, or toFixed(2) for K/D) gives the profile's numbers;
+ * stats.test.ts checks that parity.
+ */
+export function computePlayerStats(newestFirst: MatchRow[]) {
+  const rows = newestFirst.slice(0, RECENT_MATCH_WINDOW);
+  const t = sumMatchRows(rows);
+  const { wins, losses, draws } = winLossRecord(rows);
+  const decided = wins + losses;
+
+  return {
+    matches: rows.length,
+    wins,
+    losses,
+    draws,
+    kd: t.kills / Math.max(1, t.deaths),
+    acs: t.rounds ? t.score / t.rounds : 0,
+    adr: t.rounds ? t.damage / t.rounds : 0,
+    winRate: decided ? (wins / decided) * 100 : 0,
+    headshotPct: t.shots ? (t.headshots / t.shots) * 100 : 0,
+    trackerScore: trackerScore(rows, RECENT_MATCH_WINDOW),
+  };
 }

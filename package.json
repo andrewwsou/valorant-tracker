@@ -16,7 +16,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:load": "docker run --rm -v \"$PWD/load:/load\" -e BASE_URL=${BASE_URL:-http://host.docker.internal:3100} grafana/k6:2.3.0 run /load/profile-load.js",
-    "e2e:serve": "node e2e/serve.mjs"
+    "e2e:serve": "node e2e/serve.mjs",
+    "db:backfill-stats": "tsx scripts/backfill-player-stats.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",

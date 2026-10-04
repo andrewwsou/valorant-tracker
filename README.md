@@ -10,10 +10,11 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 
 - **One cached API client.** Every call to the third-party VALORANT API goes through `src/lib/henrik.ts`, which uses cache-aside with a TTL per kind of data. Repeat profile views make zero upstream calls, which matters under the API's 30-requests-per-minute limit.
 - **Idempotent ingestion.** Syncing upserts matches by match ID and player stats by a unique (match, player) key, so re-running a sync never creates duplicates. A 5-minute cooldown protects the rate limit.
+- **Precomputed player stats.** After each sync, the player's `PlayerStats` row is rebuilt from their stored matches in one short, locked transaction, never incremented, so overlapping syncs can't double count. A future leaderboard reads one indexed table instead of every match row. Tests on a real Postgres show that concurrent syncs don't conflict and that a refresh waits for the lock instead of losing an update.
 - **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
 - **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
-- **Tested at three levels.** 58 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if p95 latency passes 250 ms at 20 requests per second; locally the cached profile page held a 20 ms p95 at 100 requests per second.
+- **Tested at three levels.** 73 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if p95 latency passes 250 ms at 20 requests per second; locally the cached profile page held a 20 ms p95 at 100 requests per second.
 - **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
 - **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, the end-to-end and load tests, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
@@ -42,7 +43,7 @@ What happens when someone opens a profile:
 
 1. The page calls the profile service. It syncs the player's latest competitive matches into Postgres, unless they synced in the last 5 minutes.
 2. At the same time, rank, rank history, and the player card load from the HenrikDev API through the Redis cache.
-3. Once the sync finishes, the 10 most recent matches are read from Postgres.
+3. Once the sync finishes, it rebuilds the player's `PlayerStats` row and starts the cooldown in the same commit, and the 10 most recent matches are read from Postgres.
 4. K/D, ACS, ADR, win rate, and the tracker score are computed from those rows by pure functions in `src/services/stats.ts`.
 5. If any part fails, the page still renders and lists what failed.
 
@@ -119,13 +120,14 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `npm run test:e2e` | End-to-end tests with Playwright |
 | `npm run e2e:serve` | Starts the mock API and the app on port 3100 for the end-to-end and load tests |
 | `npm run test:load` | k6 load test against `e2e:serve`, run through Docker |
+| `npm run db:backfill-stats` | Rebuilds every player's `PlayerStats` row. Needs an explicit `DATABASE_URL`; safe to re-run |
 
 ## Testing
 
 | Level | Tool | What it covers |
 |---|---|---|
 | Unit | Vitest | Stat math, sync, caching, tracing, and input parsing. The database, cache, and `fetch` are mocked, so the suite runs in under a second |
-| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build |
+| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build. Also the `PlayerStats` table on a real database: re-syncs, concurrent syncs, the row lock, and the backfill |
 | Load | k6 | 20 requests per second for 30 seconds against the cached profile page. Fails if p95 passes 250 ms or more than 1% of requests fail |
 
 The end-to-end and load tests use a mock of the HenrikDev API (`e2e/mock-henrik.mjs`), so they are deterministic and never spend the real API's rate limit. They also use their own `valorant_e2e` database.
@@ -179,7 +181,9 @@ src/
   services/
     profile.ts             loads everything the player page shows
     sync.ts                pulls recent matches into Postgres
+    player-stats.ts        rebuilds a player's PlayerStats row in one locked transaction
     matches.ts             reads recent matches from Postgres, cached
+    match-rows.ts          the one query both the page and the stats use
     stats.ts               K/D, ACS, ADR, win rate, and tracker score
   lib/
     henrik.ts              HenrikDev client: auth, URLs, caching, logging
@@ -191,7 +195,7 @@ observability/             Grafana dashboard and provisioning
 e2e/                       Playwright tests, the mock HenrikDev API, and its test data
 load/                      k6 load test
 prisma/                    schema and migrations
-scripts/nightly-sync.ts    nightly ingestion job
+scripts/                   nightly ingestion job and the stats backfill
 ```
 
 Unit tests sit next to the code they cover, as `*.test.ts`.
@@ -202,7 +206,8 @@ Unit tests sit next to the code they cover, as `*.test.ts`.
 - [x] CI on every pull request and push to main
 - [x] End-to-end and load tests
 - [x] OpenTelemetry traces, metrics, and a Grafana dashboard
-- [ ] Leaderboard backed by precomputed aggregates
+- [x] Precomputed per-player stats
+- [ ] Leaderboard page backed by those stats
 - [ ] MCP server so AI agents can query player stats
 - [ ] Retries with backoff and rate-limit handling for upstream calls
 

@@ -59,7 +59,7 @@ describe("getRecentMatches", () => {
     expect(db.playerMatch.findMany).toHaveBeenCalledWith({
       where: { playerId: "player-1" },
       include: { match: true },
-      orderBy: { match: { startedAt: "desc" } },
+      orderBy: [{ match: { startedAt: "desc" } }, { matchId: "desc" }],
       take: 10,
     });
     expect(result.cache).toBe("MISS");

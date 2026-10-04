@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { MatchRow } from "@/services/matches";
 import {
   averageCombatStats,
+  computePlayerStats,
+  headshotPercent,
   kdRatio,
   matchResult,
   matchStats,
@@ -135,5 +137,77 @@ describe("trackerScore", () => {
     expect(trackerScore([])).toBe(0);
     expect(trackerScore([row({ kills: 0, deaths: 30, score: 0, roundsRed: 0, roundsBlue: 13 })])).toBe(0);
     expect(trackerScore([row({ kills: 60, deaths: 0, score: 20000 })])).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("headshotPercent", () => {
+  it("sums shots across matches before dividing", () => {
+    // 10 of 10 shots, then 0 of 30: 10/40 = 25%, not the 50% an average of per-match percents gives.
+    const rows = [row({ headshots: 10, bodyshots: 0, legshots: 0 }), row({ headshots: 0, bodyshots: 25, legshots: 5 })];
+    expect(headshotPercent(rows)).toBe(25);
+  });
+
+  it("is zero with no shots recorded", () => {
+    expect(headshotPercent([row({ headshots: null, bodyshots: null, legshots: null })])).toBe(0);
+  });
+});
+
+describe("computePlayerStats", () => {
+  // Mirrors e2e/fixtures.mjs: 6 newer wins then 4 older losses, 20 rounds each,
+  // 20 kills, 16 deaths, 5000 score, 3200 damage, shots 10/25/5.
+  const fixtureLine = { kills: 20, deaths: 16, score: 5000, damage: 3200, headshots: 10, bodyshots: 25, legshots: 5 };
+  const fixtureRows = [
+    ...Array.from({ length: 6 }, () => row(fixtureLine)),
+    ...Array.from({ length: 4 }, () => row({ ...fixtureLine, ...loss })),
+  ];
+
+  it("matches the numbers the e2e test reads off the profile page", () => {
+    expect(computePlayerStats(fixtureRows)).toEqual({
+      matches: 10,
+      wins: 6,
+      losses: 4,
+      draws: 0,
+      kd: 1.25,
+      acs: 250,
+      adr: 160,
+      winRate: 60,
+      headshotPct: 25,
+      trackerScore: 57,
+    });
+  });
+
+  it("slides the window: a newer win pushes out the oldest loss", () => {
+    const stats = computePlayerStats([row(fixtureLine), ...fixtureRows]);
+
+    expect(stats).toMatchObject({ matches: 10, wins: 7, losses: 3, trackerScore: 63 });
+  });
+
+  it("keeps ratios unrounded, and rounds to exactly what the profile shows", () => {
+    // Messy rows: a draw, a missing team, missing rounds, and zero deaths.
+    const rows = [
+      row({ kills: 17, deaths: 13, score: 4321, damage: 2789 }),
+      row({ ...draw, kills: 9, deaths: 0, score: 1999 }),
+      row({ team: null, kills: 3, deaths: 7 }),
+      row({ roundsRed: null, damage: 1234 }),
+      row({ ...loss, kills: 11, deaths: 19, score: 2500, headshots: 1, bodyshots: 30, legshots: 9 }),
+    ];
+    const stats = computePlayerStats(rows);
+
+    expect(stats.acs).not.toBe(Math.round(stats.acs)); // stored with full precision
+    expect(Math.round(stats.acs)).toBe(averageCombatStats(rows).acs);
+    expect(Math.round(stats.adr)).toBe(averageCombatStats(rows).adr);
+    expect(stats.kd.toFixed(2)).toBe(kdRatio(rows));
+    expect(Math.round(stats.winRate)).toBe(winLossRecord(rows).winrate);
+    expect(Math.round(stats.headshotPct)).toBe(headshotPercent(rows));
+    expect(stats.trackerScore).toBe(trackerScore(rows));
+    expect(stats).toMatchObject(
+      (({ wins, losses, draws }) => ({ wins, losses, draws }))(winLossRecord(rows)),
+    );
+  });
+
+  it("is all zeros for a player with no matches", () => {
+    expect(computePlayerStats([])).toEqual({
+      matches: 0, wins: 0, losses: 0, draws: 0, kd: 0, acs: 0, adr: 0, winRate: 0, headshotPct: 0, trackerScore: 0,
+    });
   });
 });
