@@ -152,7 +152,7 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: Load test (k6, fails if p95 goes over 250 ms)
+      - name: Load test (k6, fails if either page's p95 goes over 250 ms)
         run: |
           docker run --rm --network host --user "$(id -u):$(id -g)" \
             -v "$PWD/load:/load" -e BASE_URL=http://localhost:3100 \
@@ -165,12 +165,16 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           m = json.load(open("load/summary.json"))["metrics"]
-          d = m.get("http_req_duration{page:profile}") or m["http_req_duration"]
-          print("### Load test: cached profile page")
-          print("| Requests | Rate | Failed | p50 | p95 | Max |")
-          print("|---|---|---|---|---|---|")
-          print(f"| {int(m['http_reqs']['count'])} | {m['http_reqs']['rate']:.1f}/s | {m['http_req_failed']['value']:.2%} "
-                f"| {d['med']:.1f} ms | {d['p(95)']:.1f} ms | {d['max']:.1f} ms |")
+          print("### Load test")
+          print(f"{int(m['http_reqs']['count'])} requests at {m['http_reqs']['rate']:.1f}/s, "
+                f"{m['http_req_failed']['value']:.2%} failed")
+          print()
+          print("| Page | p50 | p95 | Max |")
+          print("|---|---|---|---|")
+          for page in ("profile", "leaderboard"):
+              d = m.get(f"http_req_duration{{page:{page}}}")
+              if d:
+                  print(f"| {page} | {d['med']:.1f} ms | {d['p(95)']:.1f} ms | {d['max']:.1f} ms |")
           PY
 
       - name: Show server logs

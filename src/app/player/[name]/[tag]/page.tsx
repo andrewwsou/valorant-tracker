@@ -39,7 +39,7 @@ export default async function PlayerPage({ params }: { params: ParamsP }) {
   const score = trackerScore(matches);
 
   return (
-    <main className="mx-auto max-w-7xl p-6 space-y-6">
+    <main className="mx-auto w-full max-w-7xl p-6 space-y-6">
       <header className="grid grid-cols-1 col-span-1 max-w-7xl max-h-sm gap-4">
         <PlayerBanner name={name} tag={tag} smallCard={profile.cardImage ?? undefined} />
       </header>
