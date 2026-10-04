@@ -6,15 +6,16 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@prisma/client": "^6.16.2",
+    "@prisma/client": "^6.19.3",
     "@upstash/redis": "^1.36.0",
-    "next": "15.5.3",
+    "next": "15.5.27",
     "pg": "^8.16.3",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
     "recharts": "^3.2.0",
     "redis": "^5.10.0",
     "zod": "^4.1.8"
@@ -26,11 +27,17 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.5.3",
-    "postcss": "^8.5.6",
-    "prisma": "^6.16.2",
+    "eslint-config-next": "15.5.27",
+    "postcss": "^8.5.28",
+    "prisma": "^6.19.3",
     "tailwindcss": "^4.1.13",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "$postcss"
+    },
+    "deepmerge-ts": "^8.0.2"
   }
 }

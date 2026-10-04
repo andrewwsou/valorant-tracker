@@ -5,6 +5,13 @@ import { nowMs, msSince } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
+/** Shape stored in the cache for this endpoint (rows are passed through untouched). */
+type CachedMatches = {
+  player: { id: string; name: string; tag: string; puuid: string | null } | null;
+  data: unknown[];
+  message?: string;
+};
+
 function headers(t0: number, cache: "HIT" | "MISS") {
   return {
     "x-cache": cache,
@@ -31,7 +38,7 @@ export async function GET(req: NextRequest) {
   const key = `dbmatches:v2:${name.toLowerCase()}:${tag.toLowerCase()}:limit=${limit}`;
 
   try {
-    const cached = await cacheGetJson<any>(key);
+    const cached = await cacheGetJson<CachedMatches>(key);
     if (cached) {
       return NextResponse.json(
         { cache: "HIT", ...cached },

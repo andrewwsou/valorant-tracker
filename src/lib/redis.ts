@@ -10,7 +10,7 @@ export async function cacheGetJson<T>(key: string): Promise<T | null> {
   return (v as T) ?? null;
 }
 
-export async function cacheSetJson(key: string, value: any, ttlSeconds: number) {
+export async function cacheSetJson(key: string, value: unknown, ttlSeconds: number) {
   await redis.set(key, value, { ex: ttlSeconds });
 }
 
