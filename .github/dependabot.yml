@@ -1,0 +1,25 @@
+# Weekly pull requests that keep dependencies current. CI runs on each one.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for all minor and patch updates instead of one per package.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Major versions (such as Next.js 16 or Prisma 7) need a deliberate migration.
+      # Security fixes still arrive through Dependabot security updates.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
