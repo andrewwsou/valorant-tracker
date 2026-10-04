@@ -29,7 +29,10 @@ export async function POST(req: NextRequest) {
     case "upstream-error":
       return new NextResponse(result.body, {
         status: result.httpStatus,
-        headers: { "content-type": result.contentType },
+        headers: {
+          "content-type": result.contentType,
+          ...(result.retryAfterSeconds ? { "retry-after": String(result.retryAfterSeconds) } : {}),
+        },
       });
     case "no-matches":
       return NextResponse.json({ message: "No matches found" });

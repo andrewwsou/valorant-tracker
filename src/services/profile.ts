@@ -65,6 +65,14 @@ async function loadProfile(id: RiotId): Promise<PlayerProfile> {
   const current = readData<HenrikMmr>(mmr, "current rank", errors);
   const rankHistory = readData<HenrikMmrHistoryEntry[]>(history, "rank history", errors);
 
+  const paused = pausedNotice([
+    sync.status === "fulfilled" && sync.value.status === "upstream-error"
+      ? { status: sync.value.httpStatus, retryAfterSeconds: sync.value.retryAfterSeconds }
+      : null,
+    ...[account, mmr, history].map((r) => (r.status === "fulfilled" ? r.value : null)),
+  ]);
+  if (paused) errors.push(paused);
+
   let matches: MatchRow[] = [];
   try {
     matches = (await getRecentMatches(id.name, id.tag, MATCH_LIMIT)).data;
@@ -89,6 +97,19 @@ async function loadProfile(id: RiotId): Promise<PlayerProfile> {
     matches,
     errors,
   };
+}
+
+/**
+ * One line explaining a pause, however many parts were paused: live lookups stop
+ * while the rate limit is spent or HenrikDev is down, and the page says for how long.
+ */
+function pausedNotice(results: ({ status: number; retryAfterSeconds?: number } | null)[]): string | null {
+  const paused = results.filter((r): r is { status: number; retryAfterSeconds: number } => !!r?.retryAfterSeconds);
+  if (paused.length === 0) return null;
+  const seconds = Math.max(...paused.map((r) => r.retryAfterSeconds));
+  return paused.some((r) => r.status === 429)
+    ? `Live data is paused for about ${seconds}s to stay under the HenrikDev rate limit.`
+    : `HenrikDev looks unavailable. Live data will be retried in about ${seconds}s.`;
 }
 
 /** Returns `data` from a successful upstream response, or records an error and returns null. */

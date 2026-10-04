@@ -97,7 +97,7 @@
     {
       "type": "stat",
       "title": "Cache hit ratio",
-      "description": "Share of cache lookups served from Redis, across all cached resources.",
+      "description": "Share of cache lookups served from Redis, across all cached resources. Cached failures count as hits: they cost no upstream call either.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -115,7 +115,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(stattrack_cache_lookups_total{result=\"hit\"}[$__rate_interval])) / sum(rate(stattrack_cache_lookups_total[$__rate_interval]))",
+          "expr": "sum(rate(stattrack_cache_lookups_total{result=~\"hit|negative_hit\"}[$__rate_interval])) / sum(rate(stattrack_cache_lookups_total[$__rate_interval]))",
           "legendFormat": "__auto",
           "range": true,
           "instant": false
@@ -168,7 +168,7 @@
     {
       "type": "stat",
       "title": "Upstream calls per minute",
-      "description": "Requests sent to the HenrikDev API. The key allows 30 per minute.",
+      "description": "HenrikDev requests sent per minute, retries included: answered ones, plus ones that got no answer at all (timeouts and refused connections). Compare with the 30-per-minute limit.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -186,7 +186,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(stattrack_upstream_requests_total[$__rate_interval])) * 60",
+          "expr": "((sum(rate(stattrack_upstream_requests_total[$__rate_interval])) or vector(0)) + (sum(rate(stattrack_upstream_failures_total{phase=\"before_response\"}[$__rate_interval])) or vector(0))) * 60",
           "legendFormat": "__auto",
           "range": true,
           "instant": false
@@ -618,6 +618,122 @@
         "showHeader": true
       },
       "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Upstream protection: retries, cooldowns, and timeouts",
+      "description": "Per minute: retries sent, lookups answered locally during a rate-limit or outage cooldown (no API call), and attempts that got no response. The dashed line is how many seconds the current cooldown has left.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(stattrack_upstream_retries_total[$__rate_interval])) * 60",
+          "legendFormat": "retry: {{reason}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (rate(stattrack_upstream_short_circuits_total[$__rate_interval])) * 60",
+          "legendFormat": "answered locally: {{reason}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (error_type) (rate(stattrack_upstream_failures_total[$__rate_interval])) * 60",
+          "legendFormat": "no response: {{error_type}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(stattrack_upstream_cooldown_remaining_seconds)",
+          "legendFormat": "cooldown seconds left",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cooldown seconds left"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11
     }
   ]
 }
