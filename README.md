@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml)
 
-Look up any VALORANT player to see their rank, recent competitive matches, and performance stats. Match history is stored in PostgreSQL, third-party API lookups are cached in Redis, and a nightly GitHub Actions job keeps tracked players up to date.
+Look up any VALORANT player to see their rank, recent competitive matches, and performance stats, and compare tracked players on a leaderboard. Match history is stored in PostgreSQL, third-party API lookups are cached in Redis, and a nightly GitHub Actions job keeps tracked players up to date.
 
 ![Player profile showing current rank, overall stats, and recent matches](docs/screenshot.png)
 
@@ -10,11 +10,12 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 
 - **One cached API client.** Every call to the third-party VALORANT API goes through `src/lib/henrik.ts`, which uses cache-aside with a TTL per kind of data. Repeat profile views make zero upstream calls, which matters under the API's 30-requests-per-minute limit.
 - **Idempotent ingestion.** Syncing upserts matches by match ID and player stats by a unique (match, player) key, so re-running a sync never creates duplicates. A 5-minute cooldown protects the rate limit.
-- **Precomputed player stats.** After each sync, the player's `PlayerStats` row is rebuilt from their stored matches in one short, locked transaction, never incremented, so overlapping syncs can't double count. A future leaderboard reads one indexed table instead of every match row. Tests on a real Postgres show that concurrent syncs don't conflict and that a refresh waits for the lock instead of losing an update.
+- **Precomputed player stats.** After each sync, the player's `PlayerStats` row is rebuilt from their stored matches in one short, locked transaction, never incremented, so overlapping syncs can't double count. The leaderboard reads one indexed table instead of every match row. Tests on a real Postgres show that concurrent syncs don't conflict and that a refresh waits for the lock instead of losing an update.
 - **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
 - **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
-- **Tested at three levels.** 73 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if p95 latency passes 250 ms at 20 requests per second; locally the cached profile page held a 20 ms p95 at 100 requests per second.
+- **Leaderboard.** Rank tracked players by tracker score, ACS, K/D, or win rate, with a minimum-matches filter. Each request is one indexed query plus a primary-key lookup for names; sort keys come from an allowlist, and exact ties share a rank.
+- **Tested at three levels.** 83 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if either the profile page or the leaderboard passes a 250 ms p95 at 20 requests per second each; locally the cached profile page held a 20 ms p95 at 100 requests per second.
 - **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
 - **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, the end-to-end and load tests, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
@@ -127,8 +128,8 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | Level | Tool | What it covers |
 |---|---|---|
 | Unit | Vitest | Stat math, sync, caching, tracing, and input parsing. The database, cache, and `fetch` are mocked, so the suite runs in under a second |
-| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build. Also the `PlayerStats` table on a real database: re-syncs, concurrent syncs, the row lock, and the backfill |
-| Load | k6 | 20 requests per second for 30 seconds against the cached profile page. Fails if p95 passes 250 ms or more than 1% of requests fail |
+| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build. Also the `PlayerStats` table on a real database (re-syncs, concurrent syncs, the row lock, the backfill) and the leaderboard's ranking, sorting, and filtering |
+| Load | k6 | 20 requests per second each to the cached profile page and the leaderboard, for 30 seconds. Fails if either page's p95 passes 250 ms or more than 1% of requests fail |
 
 The end-to-end and load tests use a mock of the HenrikDev API (`e2e/mock-henrik.mjs`), so they are deterministic and never spend the real API's rate limit. They also use their own `valorant_e2e` database.
 
@@ -165,6 +166,7 @@ The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed 
 | `GET` | `/api/elo?region=&name=&tag=` | Rank change for each recent match |
 | `POST` | `/api/sync?region=&name=&tag=&size=` | Pulls recent matches into Postgres |
 | `GET` | `/api/db/matches?name=&tag=&limit=` | Recent matches from Postgres |
+| `GET` | `/api/leaderboard?sort=&minMatches=&limit=` | Top players. `sort` is `trackerScore` (default), `acs`, `kd`, or `winRate`; `minMatches` 1 to 10 (default 5); `limit` 1 to 100 (default 25) |
 | `GET` | `/api/health` | Database and cache status |
 
 `region` defaults to `na` and must be one of `na`, `eu`, `ap`, `kr`, `latam`, or `br`. Cached endpoints return an `x-cache` header set to `HIT` or `MISS`.
@@ -176,12 +178,14 @@ src/
   app/
     api/                   route handlers: parse input, call a service
     player/[name]/[tag]/   player profile page
+    leaderboard/           leaderboard page
   instrumentation.ts       starts OpenTelemetry when an endpoint is configured
   components/              UI components
   services/
     profile.ts             loads everything the player page shows
     sync.ts                pulls recent matches into Postgres
     player-stats.ts        rebuilds a player's PlayerStats row in one locked transaction
+    leaderboard.ts         ranks players from PlayerStats; validates sort and filters
     matches.ts             reads recent matches from Postgres, cached
     match-rows.ts          the one query both the page and the stats use
     stats.ts               K/D, ACS, ADR, win rate, and tracker score
@@ -207,7 +211,7 @@ Unit tests sit next to the code they cover, as `*.test.ts`.
 - [x] End-to-end and load tests
 - [x] OpenTelemetry traces, metrics, and a Grafana dashboard
 - [x] Precomputed per-player stats
-- [ ] Leaderboard page backed by those stats
+- [x] Leaderboard page and API backed by those stats
 - [ ] MCP server so AI agents can query player stats
 - [ ] Retries with backoff and rate-limit handling for upstream calls
 

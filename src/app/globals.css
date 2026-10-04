@@ -1,15 +1,10 @@
 @import "tailwindcss";
 
+/* The UI is designed for a dark background, so it stays dark whatever the OS theme. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0E141B;
-    --foreground: #ededed;
-  }
+  --background: #0E141B;
+  --foreground: #ededed;
+  color-scheme: dark;
 }
 
 body {
