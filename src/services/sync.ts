@@ -1,6 +1,7 @@
 import { getMatches, type HenrikMatch, type HenrikPlayer } from "@/lib/henrik";
 import { prisma } from "@/lib/prisma";
 import type { RiotId } from "@/lib/riot-id";
+import { syncRuns, withSpan } from "@/lib/telemetry";
 import { invalidateRecentMatches } from "@/services/matches";
 
 /** Minimum time between two syncs of the same player, to protect the upstream rate limit. */
@@ -57,7 +58,25 @@ export function toPlayerMatchRecord(player: HenrikPlayer) {
  * Idempotent: matches are keyed by match ID and stat lines by (match, player),
  * so running it twice never creates duplicates. Skipped inside the cooldown.
  */
-export async function syncPlayer(id: RiotId, size = 10): Promise<SyncResult> {
+export function syncPlayer(id: RiotId, size = 10): Promise<SyncResult> {
+  const attributes = { "valorant.region": id.region, "valorant.player": `${id.name}#${id.tag}` };
+  return withSpan("sync.player", attributes, async (span) => {
+    try {
+      const result = await runSync(id, size);
+      span.setAttribute("sync.status", result.status);
+      if (result.status === "synced") {
+        span.setAttribute("sync.matches_upserted", result.matchesUpserted);
+      }
+      syncRuns.add(1, { status: result.status });
+      return result;
+    } catch (e) {
+      syncRuns.add(1, { status: "error" });
+      throw e;
+    }
+  });
+}
+
+async function runSync(id: RiotId, size: number): Promise<SyncResult> {
   const { region, name, tag } = id;
 
   const existing = await prisma.player.findUnique({

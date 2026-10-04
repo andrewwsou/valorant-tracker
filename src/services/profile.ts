@@ -7,7 +7,9 @@ import {
   type HenrikMmr,
   type HenrikMmrHistoryEntry,
 } from "@/lib/henrik";
+import { msSince, nowMs } from "@/lib/metrics";
 import type { RiotId } from "@/lib/riot-id";
+import { profileDuration, withSpan } from "@/lib/telemetry";
 import { getRecentMatches, type MatchRow } from "@/services/matches";
 import { syncPlayer } from "@/services/sync";
 
@@ -31,7 +33,18 @@ const MATCH_LIMIT = 10;
  * only the match list depends on the sync. Each part fails on its own, so one
  * outage shows an error message instead of breaking the page.
  */
-export async function getPlayerProfile(id: RiotId): Promise<PlayerProfile> {
+export function getPlayerProfile(id: RiotId): Promise<PlayerProfile> {
+  const attributes = { "valorant.region": id.region, "valorant.player": `${id.name}#${id.tag}` };
+  return withSpan("profile.load", attributes, async (span) => {
+    const t0 = nowMs();
+    const profile = await loadProfile(id);
+    span.setAttributes({ "profile.matches": profile.matches.length, "profile.errors": profile.errors.length });
+    profileDuration.record(msSince(t0) / 1000, { outcome: profile.errors.length ? "partial" : "complete" });
+    return profile;
+  });
+}
+
+async function loadProfile(id: RiotId): Promise<PlayerProfile> {
   const errors: string[] = [];
 
   const [sync, account, mmr, history] = await Promise.allSettled([

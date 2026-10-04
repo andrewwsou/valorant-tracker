@@ -7,6 +7,13 @@
 import { nowMs, msSince } from "@/lib/metrics";
 import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 import type { Region } from "@/lib/riot-id";
+import {
+  cacheLookups,
+  recordRateLimitRemaining,
+  upstreamDuration,
+  upstreamRequests,
+  withSpan,
+} from "@/lib/telemetry";
 
 const BASE_URL = "https://api.henrikdev.xyz/valorant";
 
@@ -29,23 +36,39 @@ export type CachedUpstreamResponse = UpstreamResponse & { cache: "HIT" | "MISS" 
 
 const enc = encodeURIComponent;
 
-async function request(path: string): Promise<UpstreamResponse> {
+/** Upstream endpoints, used as low-cardinality labels on spans and metrics. */
+type Endpoint = "account" | "mmr" | "mmr-history" | "matches";
+
+async function request(endpoint: Endpoint, path: string): Promise<UpstreamResponse> {
   const apiKey = process.env.HENRIKDEV_API_KEY;
   if (!apiKey) throw new Error("HENRIKDEV_API_KEY is not set");
 
-  const t0 = nowMs();
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { Authorization: apiKey },
-    cache: "no-store",
-  });
-  const body = await res.text();
+  return withSpan(`henrik.fetch ${endpoint}`, { "henrik.endpoint": endpoint }, async (span) => {
+    const t0 = nowMs();
+    const res = await fetch(`${BASE_URL}${path}`, {
+      headers: { Authorization: apiKey },
+      cache: "no-store",
+    });
+    const body = await res.text();
+    const ms = msSince(t0);
 
-  console.info(`[henrik] ${res.status} ${path} ${msSince(t0)}ms ${Math.round(body.length / 1024)}KB`);
-  return {
-    status: res.status,
-    contentType: res.headers.get("content-type") ?? "application/json",
-    body,
-  };
+    span.setAttributes({ "http.response.status_code": res.status, "henrik.response.bytes": body.length });
+    upstreamRequests.add(1, { endpoint, status_code: res.status });
+    upstreamDuration.record(ms / 1000, { endpoint });
+
+    const remaining = res.headers.get("x-ratelimit-remaining");
+    if (remaining !== null) {
+      span.setAttribute("henrik.ratelimit.remaining", Number(remaining));
+      recordRateLimitRemaining(Number(remaining));
+    }
+
+    console.info(`[henrik] ${res.status} ${path} ${ms}ms ${Math.round(body.length / 1024)}KB`);
+    return {
+      status: res.status,
+      contentType: res.headers.get("content-type") ?? "application/json",
+      body,
+    };
+  });
 }
 
 /**
@@ -53,27 +76,37 @@ async function request(path: string): Promise<UpstreamResponse> {
  * and cache the response if it succeeded. Cache errors never fail the request.
  */
 async function cachedRequest(
+  endpoint: Endpoint,
   path: string,
   cacheKey: string,
   ttlSeconds: number,
 ): Promise<CachedUpstreamResponse> {
-  try {
-    const hit = await cacheGetJson<UpstreamResponse>(cacheKey);
-    if (hit) return { ...hit, cache: "HIT" };
-  } catch (e) {
-    console.warn(`[cache] read failed for ${cacheKey}:`, e);
-  }
-
-  const fresh = await request(path);
-
-  if (fresh.status === 200) {
+  return withSpan(`henrik.lookup ${endpoint}`, { "henrik.endpoint": endpoint }, async (span) => {
     try {
-      await cacheSetJson(cacheKey, fresh, ttlSeconds);
+      const hit = await cacheGetJson<UpstreamResponse>(cacheKey);
+      if (hit) {
+        span.setAttribute("cache.hit", true);
+        cacheLookups.add(1, { resource: endpoint, result: "hit" });
+        return { ...hit, cache: "HIT" as const };
+      }
+      cacheLookups.add(1, { resource: endpoint, result: "miss" });
     } catch (e) {
-      console.warn(`[cache] write failed for ${cacheKey}:`, e);
+      cacheLookups.add(1, { resource: endpoint, result: "error" });
+      console.warn(`[cache] read failed for ${cacheKey}:`, e);
     }
-  }
-  return { ...fresh, cache: "MISS" };
+
+    span.setAttribute("cache.hit", false);
+    const fresh = await request(endpoint, path);
+
+    if (fresh.status === 200) {
+      try {
+        await cacheSetJson(cacheKey, fresh, ttlSeconds);
+      } catch (e) {
+        console.warn(`[cache] write failed for ${cacheKey}:`, e);
+      }
+    }
+    return { ...fresh, cache: "MISS" as const };
+  });
 }
 
 /** Builds a versioned cache key. Riot IDs are case-insensitive, so parts are lowercased. */
@@ -84,6 +117,7 @@ function cacheKey(...parts: string[]): string {
 /** Account details, including the player card images. */
 export function getAccount(name: string, tag: string) {
   return cachedRequest(
+    "account",
     `/v1/account/${enc(name)}/${enc(tag)}`,
     cacheKey("account", name, tag),
     CACHE_TTL_SECONDS.account,
@@ -93,6 +127,7 @@ export function getAccount(name: string, tag: string) {
 /** Current rank and peak rank. */
 export function getMmr(region: Region, name: string, tag: string) {
   return cachedRequest(
+    "mmr",
     `/v2/mmr/${region}/${enc(name)}/${enc(tag)}`,
     cacheKey("mmr", region, name, tag),
     CACHE_TTL_SECONDS.mmr,
@@ -102,6 +137,7 @@ export function getMmr(region: Region, name: string, tag: string) {
 /** Rank change for each recent competitive match. */
 export function getMmrHistory(region: Region, name: string, tag: string) {
   return cachedRequest(
+    "mmr-history",
     `/v1/mmr-history/${region}/${enc(name)}/${enc(tag)}`,
     cacheKey("mmr-history", region, name, tag),
     CACHE_TTL_SECONDS.mmr,
@@ -119,7 +155,7 @@ export function getMatches(
   opts: { size: number; mode: string },
 ) {
   const qs = new URLSearchParams({ size: String(opts.size), mode: opts.mode });
-  return request(`/v3/matches/${region}/${enc(name)}/${enc(tag)}?${qs}`);
+  return request("matches", `/v3/matches/${region}/${enc(name)}/${enc(tag)}?${qs}`);
 }
 
 /* ------------------------------------------------------------------------ */

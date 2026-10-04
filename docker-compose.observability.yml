@@ -1,0 +1,29 @@
+# Adds local observability on top of docker-compose.yml: Grafana, Tempo (traces),
+# Prometheus (metrics), and Loki in one container (grafana/otel-lgtm), and points
+# the app's OpenTelemetry exporter at it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+#
+# Grafana runs at http://localhost:3001 with the StatTrack dashboard preloaded.
+
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.35.0
+    environment:
+      # Local only (published on 127.0.0.1): open Grafana without a login.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    ports:
+      - "127.0.0.1:3001:3000" # Grafana
+      - "127.0.0.1:4318:4318" # OTLP over HTTP, so `npm run dev` on the host can send data too
+    volumes:
+      - ./observability/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/stattrack.yaml:ro
+      - ./observability/grafana/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/stattrack:ro
+
+  web:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_SERVICE_NAME: valorant-stattrack
+    depends_on:
+      lgtm:
+        condition: service_started
