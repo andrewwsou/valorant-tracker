@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { invalidatePlayerMatches } from "@/lib/redis";
+import type { HenrikMatch } from "@/lib/henrik";
 
 export const dynamic = "force-dynamic";
-
-type HenrikMatchFull = any;
 
 export async function POST(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -59,7 +58,7 @@ export async function POST(req: NextRequest) {
   }
 
   const json = await r.json();
-  const matches: HenrikMatchFull[] = Array.isArray(json?.data) ? json.data : [];
+  const matches: HenrikMatch[] = Array.isArray(json?.data) ? json.data : [];
 
   if (matches.length === 0) {
     return NextResponse.json({ message: "No matches found" });
@@ -68,7 +67,7 @@ export async function POST(req: NextRequest) {
   const first = matches[0];
   const playerData =
     first?.players?.all_players?.find(
-      (p: any) =>
+      (p) =>
         (p.name ?? "").toLowerCase() === name.toLowerCase() &&
         (p.tag ?? "").toLowerCase() === tag.toLowerCase()
     ) ?? null;
@@ -115,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     matchesUpserted++;
 
-    const p = m?.players?.all_players?.find((x: any) => x?.puuid === puuid);
+    const p = m?.players?.all_players?.find((x) => x?.puuid === puuid);
     if (!p) continue;
 
     await prisma.playerMatch.upsert({

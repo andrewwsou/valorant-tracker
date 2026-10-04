@@ -38,8 +38,8 @@ async function main() {
     try {
       const out = await runOne(p);
       console.log(out);
-    } catch (e: any) {
-      console.error(e?.message ?? e);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : e);
     }
   }
 }
