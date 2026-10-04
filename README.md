@@ -11,6 +11,8 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 - **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
 - **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
+- **Tested core logic.** 54 Vitest unit tests cover the stat math, sync, caching, and input parsing, with the database and APIs mocked.
+- **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
 - **Nightly sync** through a scheduled GitHub Actions workflow.
 
 ## Architecture
@@ -18,23 +20,26 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 ```mermaid
 flowchart LR
     subgraph app [Next.js app]
-        pages[Server-rendered pages] --> api[API routes]
-        api --> client[HenrikDev client]
+        pages[Server-rendered pages] --> services[Services]
+        api[API routes] --> services
+        services --> client[HenrikDev client]
     end
 
     browser([Browser]) --> pages
+    cron[Nightly GitHub Actions job] -->|"POST /api/sync"| api
     client -->|cache-aside with TTL| redis[(Redis)]
     client -->|on cache miss| henrik[HenrikDev VALORANT API]
-    api -->|Prisma| postgres[(PostgreSQL)]
-    cron[Nightly GitHub Actions job] -->|"POST /api/sync"| api
+    services -->|cached reads| redis
+    services -->|Prisma| postgres[(PostgreSQL)]
 ```
 
 What happens when someone opens a profile:
 
-1. The page asks `/api/sync` to pull the player's latest competitive matches. The sync is skipped if it already ran in the last 5 minutes.
-2. Matches and per-player stats are upserted into Postgres.
-3. K/D, ACS, ADR, win rate, and the tracker score are computed from the stored rows.
-4. Rank, rank history, and the player card come from the HenrikDev API through the Redis cache.
+1. The page calls the profile service. It syncs the player's latest competitive matches into Postgres, unless they synced in the last 5 minutes.
+2. At the same time, rank, rank history, and the player card load from the HenrikDev API through the Redis cache.
+3. Once the sync finishes, the 10 most recent matches are read from Postgres.
+4. K/D, ACS, ADR, win rate, and the tracker score are computed from those rows by pure functions in `src/services/stats.ts`.
+5. If any part fails, the page still renders and lists what failed.
 
 | Data | Cached for | Why |
 |---|---|---|
@@ -77,6 +82,8 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
 | `npm run typecheck` | TypeScript type check |
+| `npm test` | Unit tests with Vitest |
+| `npm run test:coverage` | Unit tests with a coverage report |
 
 ## Configuration
 
@@ -86,7 +93,6 @@ In production the app reaches Redis through Upstash's REST API. Locally, [server
 | `UPSTASH_REDIS_REST_URL` | yes | Redis REST endpoint: Upstash, or the local proxy |
 | `UPSTASH_REDIS_REST_TOKEN` | yes | Token for that endpoint |
 | `HENRIKDEV_API_KEY` | yes | HenrikDev API key |
-| `NEXT_PUBLIC_BASE_URL` | no | Base URL the server uses to call its own API routes. Defaults to `http://localhost:3000` |
 
 The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed app, and `SYNC_PLAYERS`, a JSON array such as `[{"name":"PlayerName","tag":"NA1"}]`.
 
@@ -108,9 +114,14 @@ The nightly workflow reads two GitHub Actions secrets: `BASE_URL`, the deployed 
 ```
 src/
   app/
-    api/                   route handlers
+    api/                   route handlers: parse input, call a service
     player/[name]/[tag]/   player profile page
   components/              UI components
+  services/
+    profile.ts             loads everything the player page shows
+    sync.ts                pulls recent matches into Postgres
+    matches.ts             reads recent matches from Postgres, cached
+    stats.ts               K/D, ACS, ADR, win rate, and tracker score
   lib/
     henrik.ts              HenrikDev client: auth, URLs, caching, logging
     redis.ts               cache helpers
@@ -120,9 +131,12 @@ prisma/                    schema and migrations
 scripts/nightly-sync.ts    nightly ingestion job
 ```
 
+Unit tests sit next to the code they cover, as `*.test.ts`.
+
 ## Roadmap
 
-- [ ] Unit and end-to-end tests, with CI on every pull request
+- [x] Unit tests with Vitest
+- [ ] End-to-end tests and CI on every pull request
 - [ ] OpenTelemetry traces and metrics
 - [ ] Leaderboard backed by precomputed aggregates
 - [ ] MCP server so AI agents can query player stats

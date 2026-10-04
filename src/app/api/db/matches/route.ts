@@ -1,16 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { cacheGetJson, cacheSetJson } from "@/lib/redis";
-import { nowMs, msSince } from "@/lib/metrics";
+import { NextResponse, type NextRequest } from "next/server";
+import { msSince, nowMs } from "@/lib/metrics";
+import { getRecentMatches } from "@/services/matches";
 
 export const dynamic = "force-dynamic";
-
-/** Shape stored in the cache for this endpoint (rows are passed through untouched). */
-type CachedMatches = {
-  player: { id: string; name: string; tag: string; puuid: string | null } | null;
-  data: unknown[];
-  message?: string;
-};
 
 function headers(t0: number, cache: "HIT" | "MISS") {
   return {
@@ -20,86 +12,18 @@ function headers(t0: number, cache: "HIT" | "MISS") {
   };
 }
 
+/** A player's recent matches from Postgres. Cached for 60 seconds; a sync clears it. */
 export async function GET(req: NextRequest) {
   const t0 = nowMs();
-
-  const { searchParams } = new URL(req.url);
+  const { searchParams } = req.nextUrl;
   const name = (searchParams.get("name") ?? "").trim();
   const tag = (searchParams.get("tag") ?? "").trim();
   const limit = Math.min(parseInt(searchParams.get("limit") ?? "10", 10) || 10, 25);
 
   if (!name || !tag) {
-    return NextResponse.json(
-      { error: "Missing name or tag" },
-      { status: 400, headers: headers(t0, "MISS") }
-    );
+    return NextResponse.json({ error: "Missing name or tag" }, { status: 400, headers: headers(t0, "MISS") });
   }
 
-  const key = `dbmatches:v2:${name.toLowerCase()}:${tag.toLowerCase()}:limit=${limit}`;
-
-  try {
-    const cached = await cacheGetJson<CachedMatches>(key);
-    if (cached) {
-      return NextResponse.json(
-        { cache: "HIT", ...cached },
-        { headers: headers(t0, "HIT") }
-      );
-    }
-  } catch {}
-
-  const player = await prisma.player.findUnique({
-    where: { name_tag: { name, tag } },
-    select: { id: true, name: true, tag: true, puuid: true },
-  });
-
-  if (!player) {
-    const payload = { player: null, data: [], message: "Player not found in DB. Run /api/sync first." };
-
-    try {
-      await cacheSetJson(key, payload, 15);
-    } catch {}
-
-    return NextResponse.json(
-      { cache: "MISS", ...payload },
-      { headers: headers(t0, "MISS") }
-    );
-  }
-
-  const rows = await prisma.playerMatch.findMany({
-    where: { playerId: player.id },
-    include: { match: true },
-    orderBy: { match: { startedAt: "desc" } },
-    take: limit,
-  });
-
-  const data = rows.map((pm) => ({
-    matchId: pm.matchId,
-    map: pm.match.map,
-    mode: pm.match.mode,
-    region: pm.match.region,
-    startedAt: pm.match.startedAt ? pm.match.startedAt.toISOString() : null,
-    roundsRed: pm.match.roundsRed,
-    roundsBlue: pm.match.roundsBlue,
-    team: pm.team,
-    kills: pm.kills,
-    deaths: pm.deaths,
-    assists: pm.assists,
-    score: pm.score,
-    damage: pm.damage,
-    headshots: pm.headshots,
-    bodyshots: pm.bodyshots,
-    legshots: pm.legshots,
-    agentIcon: pm.agentIcon,
-  }));
-
-  const payload = { player, data };
-
-  try {
-    await cacheSetJson(key, payload, 60);
-  } catch {}
-
-  return NextResponse.json(
-    { cache: "MISS", ...payload },
-    { headers: headers(t0, "MISS") }
-  );
+  const result = await getRecentMatches(name, tag, limit);
+  return NextResponse.json(result, { headers: headers(t0, result.cache) });
 }
