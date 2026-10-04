@@ -1,5 +1,7 @@
 # VALORANT StatTrack
 
+[![CI](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml)
+
 Look up any VALORANT player to see their rank, recent competitive matches, and performance stats. Match history is stored in PostgreSQL, third-party API lookups are cached in Redis, and a nightly GitHub Actions job keeps tracked players up to date.
 
 ![Player profile showing current rank, overall stats, and recent matches](docs/screenshot.png)
@@ -13,6 +15,7 @@ Look up any VALORANT player to see their rank, recent competitive matches, and p
 - **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. If the database goes down, health returns 503.
 - **Tested core logic.** 54 Vitest unit tests cover the stat math, sync, caching, and input parsing, with the database and APIs mocked.
 - **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
+- **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
 - **Nightly sync** through a scheduled GitHub Actions workflow.
 
 ## Architecture
@@ -54,7 +57,7 @@ TypeScript, Next.js 15 (App Router), React 19, Tailwind CSS 4, PostgreSQL 16, Pr
 
 ## Getting started
 
-You need a [HenrikDev](https://docs.henrikdev.xyz) API key.
+You need Node 22 or newer (see `.nvmrc`), Docker, and a [HenrikDev](https://docs.henrikdev.xyz) API key.
 
 ### Run everything with Docker
 
@@ -136,7 +139,8 @@ Unit tests sit next to the code they cover, as `*.test.ts`.
 ## Roadmap
 
 - [x] Unit tests with Vitest
-- [ ] End-to-end tests and CI on every pull request
+- [x] CI on every pull request and push to main
+- [ ] End-to-end and load tests
 - [ ] OpenTelemetry traces and metrics
 - [ ] Leaderboard backed by precomputed aggregates
 - [ ] MCP server so AI agents can query player stats
