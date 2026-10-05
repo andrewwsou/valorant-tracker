@@ -137,9 +137,14 @@ test("the tools' transaction is read-only and time-limited, enforced by Postgres
 });
 
 /** Starts the server as a raw process, to watch exactly what it writes and how it exits. */
-function startServer(env: Record<string, string>) {
+function startServer(env: Record<string, string>, launch: "npm" | "direct" = "npm") {
   // Only these variables: nothing from this shell, so no stray DATABASE_URL.
-  const child = spawn(COMMAND, ARGS, { cwd: tmpdir(), env: env as NodeJS.ProcessEnv, stdio: "pipe" });
+  const options = { env: env as NodeJS.ProcessEnv, stdio: "pipe" } as const;
+  const child =
+    launch === "npm"
+      ? spawn(COMMAND, ARGS, { ...options, cwd: tmpdir() })
+      : // One process, with no npm or shell in between, so a signal reaches the server itself.
+        spawn(process.execPath, ["--import", "tsx", "src/mcp/main.ts"], { ...options, cwd: REPO });
   let stdout = "";
   let stderr = "";
   const waiting = new Map<number, (message: Record<string, unknown>) => void>();
@@ -255,13 +260,18 @@ test("the server exits as soon as the client closes stdin", async () => {
 });
 
 test("the server shuts down cleanly on SIGTERM", async () => {
-  const server = startServer(serverEnv());
+  // Started without npm. Through `npm run`, the signal goes to npm, then to the shell running
+  // the script. Linux's sh (dash) stays a separate process and doesn't pass it on, so the server
+  // never sees it; macOS's sh replaces itself with the command, so there it does. Clients stop a
+  // stdio server by closing stdin first (the test above), which works through npm on both.
+  const server = startServer(serverEnv(), "direct");
   await server.ready;
 
   server.child.kill("SIGTERM");
 
-  await exitWithin(server, 5_000);
-  expect(server.stderr()).toContain("stopping: SIGTERM");
+  const { code } = await exitWithin(server, 5_000);
+  expect(code).toBe(0);
+  await expect.poll(() => server.stderr()).toContain("stopping: SIGTERM");
 });
 
 test("the server exits on its own after idling, even with stdin still open", async () => {
