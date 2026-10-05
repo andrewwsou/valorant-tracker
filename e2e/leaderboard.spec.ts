@@ -89,11 +89,29 @@ test("the nav leads to the leaderboard and a row leads to that player's profile"
   await expect(page.getByText("Immortal 1")).toBeVisible();
 });
 
-test("the home page fits one screen under the nav", async ({ page }) => {
+test("the home page previews the top players and links to them and to the full board", async ({ page }) => {
   await page.goto("/");
 
-  const overflow = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
-  expect(overflow).toBeLessThanOrEqual(0);
+  const top = page.getByRole("region", { name: "Top tracked players" });
+  await expect(top.getByRole("listitem")).toHaveCount(3);
+  await expect(top.getByRole("listitem").first()).toContainText("Ace#E2E");
+  await expect(top.getByRole("listitem").first()).toContainText("67");
+
+  await top.getByRole("link", { name: /Tester#E2E/ }).click();
+  await expect(page).toHaveURL(/\/player\/Tester\/E2E$/);
+
+  await page.goto("/");
+  await page.getByRole("link", { name: /Full leaderboard/ }).click();
+  await expect(page).toHaveURL(/\/leaderboard$/);
+});
+
+test("no page scrolls sideways on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const path of ["/", "/leaderboard", "/player/Tester/E2E"]) {
+    await page.goto(path);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow, path).toBeLessThanOrEqual(0);
+  }
 });
 
 test("the JSON API sorts, limits, and validates", async ({ request }) => {

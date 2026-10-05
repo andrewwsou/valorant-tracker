@@ -1,43 +1,21 @@
 import Image from "next/image";
 
 type Props = {
-  rankIcon?: string;   
-  rankText?: string;  
+  rankIcon?: string;
+  rankText?: string;
   peakRankText?: string;
-
 };
 
-
-export default function CurrentRating({
-  rankIcon,
-  rankText,
-  peakRankText,
-}: Props) {
-
+export default function CurrentRating({ rankIcon, rankText, peakRankText }: Props) {
   return (
-    <section className="relative overflow-hidden rounded-2xl border bg-slate-800 p-5 text-slate-200">
-      <div className="pointer-events-none absolute"/>
+    <section className="panel flex items-center gap-4 p-5">
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-ink-800">
+        {rankIcon ? <Image src={rankIcon} alt="Rank" width={56} height={56} /> : <span aria-hidden className="text-2xl text-slate-600">?</span>}
+      </div>
 
-      <div className="relative z-10 flex items-center gap-4">
-        <div className="h-16 w-16 overflow-hidden">
-          { rankIcon ? (<Image src={rankIcon} alt="Rank" width={64} height={64}/>) : null }
-        </div>
-
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-semibold tracking-tight">
-              {rankText}<span className="text-slate-200"></span>
-            </h1>
-          </div>
-
-          <div className="mt-1 flex items-center gap-3 text-sm text-slate-300">
-            <span className="rounded text-white/70 py-0.5">
-              Peak - {peakRankText ?? "Peak Rank"}
-            </span>
-            <span className="inline-flex items-center gap-1">
-            </span>
-          </div>
-        </div>
+      <div className="min-w-0">
+        <h2 className="truncate text-xl font-semibold tracking-tight text-slate-50">{rankText ?? "Unranked"}</h2>
+        <p className="mt-0.5 text-sm text-slate-400">{peakRankText ? `Peak - ${peakRankText}` : "Peak rank unavailable"}</p>
       </div>
     </section>
   );

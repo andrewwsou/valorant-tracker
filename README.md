@@ -2,27 +2,22 @@
 
 [![CI](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewwsou/valorant-tracker/actions/workflows/ci.yml)
 
-Look up any VALORANT player to see their rank, recent competitive matches, and performance stats, and compare tracked players on a leaderboard. Match history is stored in PostgreSQL, third-party API lookups are cached in Redis, and a nightly GitHub Actions job keeps tracked players up to date. AI assistants such as Claude can query the same stats through a read-only MCP server.
+Look up any VALORANT player to see their rank, recent competitive matches, and performance stats, and compare tracked players on a leaderboard. Match history is stored in PostgreSQL, third-party API lookups are cached in Redis, and a nightly GitHub Actions job keeps tracked players up to date. AI assistants can query the same stats through a read-only MCP server.
 
-![Player profile showing current rank, overall stats, and recent matches](docs/screenshot.png)
+![Player profile with rank, recent form, stat tiles, and the match table](docs/screenshot.png)
 
 ## Highlights
 
-- **One resilient API client.** Every call to the third-party VALORANT API goes through `src/lib/henrik.ts`, which uses cache-aside with a TTL per kind of data and caches failures briefly too, so repeat views, even of players who don't exist, make zero upstream calls under the API's 30-requests-per-minute limit. Each call has timeouts that cover the response body, an overall deadline, and at most one retry with jittered backoff. A 429, or a budget that hits zero, starts a cooldown shared through Redis, so no instance calls the API until the window resets. A circuit breaker does the same after 5 failures in a row.
-- **Validated upstream data.** Every HenrikDev payload the app stores or renders is checked with zod first. (The `/api/player`, `/api/overall` and `/api/elo` routes are plain proxies and pass HenrikDev's body through unchanged.) Fields that identify a match or player are strict. Any other field that's missing or the wrong type becomes null and is counted in a metric, so one odd value never discards a match, and an upstream rename shows up on the dashboard instead of as silent blanks. Match data comes from HenrikDev's v4 endpoint, half the size of v3. Before switching, two live requests confirmed the same match IDs and zero differences in any stored column across 5 matches.
-- **Players are their PUUID.** A player is identified by Riot's permanent PUUID, and their Riot ID is matched in any capitalization, so a rename or a differently capitalized URL never splits a player, skips the cooldown, or breaks the nightly sync. When someone takes a Riot ID another player used to have, it moves between rows in one transaction. Simultaneous views of one player make a single upstream call between them, through a lock in Redis that every instance shares.
-- **Idempotent ingestion.** Syncing upserts matches by match ID and player stats by a unique (match, player) key, so re-running a sync never creates duplicates. A 5-minute cooldown protects the rate limit. Each sync writes its matches and stat lines in two batched statements instead of one per row, sorted by key so teammates syncing the same matches can't deadlock. Without the sort, a test reproduces the deadlock on every run.
-- **Precomputed player stats.** After each sync, the player's `PlayerStats` row is rebuilt from their stored matches in one short, locked transaction, never incremented, so overlapping syncs can't double count. The leaderboard reads one indexed table instead of every match row. Tests on a real Postgres show that concurrent syncs don't conflict and that a refresh waits for the lock instead of losing an update.
-- **Normalized schema.** `Match`, `Player`, and `PlayerMatch` tables with unique constraints and indexes on every lookup path.
-- **Production Docker image.** A multi-stage build with Next.js standalone output: 382 MB, runs as a non-root user, and contains no source code or secrets.
-- **Health checks and graceful degradation.** `/api/health` checks Postgres and Redis. If the cache goes down, pages keep working and health reports `degraded`. Cache calls give up after 500 ms instead of retrying for about 4 seconds. If the database goes down, health returns 503.
-- **Leaderboard.** Rank tracked players by tracker score, ACS, K/D, or win rate, with a minimum-matches filter. Each request is one indexed query plus a primary-key lookup for names; sort keys come from an allowlist, and exact ties share a rank.
-- **MCP server for AI agents.** Three typed tools let Claude and other MCP clients read player stats, recent matches, and the leaderboard over stdio. Postgres enforces read-only access, every call has hard caps on rate, result size, and query time, and the server exits when its client disconnects or sits idle. It never calls an AI model itself, and a CI test keeps it that way.
-- **Tested at three levels.** 251 Vitest unit tests cover the logic. Playwright drives a real browser through the production build against a mocked upstream API. A k6 load test fails CI if either the profile page or the leaderboard passes a 250 ms p95 at 20 requests per second each; locally the cached profile page held a 20 ms p95 at 100 requests per second.
-- **OpenTelemetry tracing and metrics.** Every request is traced through the cache, the upstream API, and each Prisma query. Custom metrics track profile load time, cache hit ratio, upstream latency, the API rate-limit budget, and sync outcomes, and a preloaded Grafana dashboard shows them.
-- **Parallel page loading.** The profile page calls a service layer directly instead of its own API over HTTP, and syncs matches while rank and player card load at the same time.
-- **CI on every pull request and push to main.** GitHub Actions runs lint, type checks, unit tests with coverage, the end-to-end and load tests, a production build, and a dependency audit. It also boots the full Docker stack and waits for the health check to pass. Dependabot opens weekly update pull requests.
-- **Nightly sync that fails loudly.** A scheduled GitHub Actions job syncs tracked players through an endpoint that needs a secret, waits out rate limits as the app asks, and fails the run with a per-player summary when anything goes wrong.
+- **Fast, readable UI.** A dark, responsive interface: a search box that accepts a pasted Riot ID, stat tiles with color and meters, a recent-form strip with the current streak, win and loss markers on every match, and a sortable leaderboard. A loading skeleton appears at once while a first-time profile syncs.
+- **One resilient API client.** Every call to the third-party VALORANT API goes through `src/lib/henrik.ts`. It caches results and failures, so repeat views make zero upstream calls under the API's limit of 30 requests per minute. Each call has timeouts, a deadline, and at most one jittered retry. A 429 or an empty budget starts a cooldown shared through Redis, and a circuit breaker opens after 5 failures in a row.
+- **Validated upstream data.** Every payload the app stores or renders is checked with zod. IDs are strict; any other bad field becomes null and is counted in a metric, so one odd value never discards a match.
+- **Players are their PUUID.** A player is identified by Riot's permanent ID, and Riot IDs match in any capitalization, so renames never split a player. Simultaneous views of one player share a Redis lock and make one upstream call between them.
+- **Idempotent, deadlock-free ingestion.** A sync upserts matches and stat lines in two batched statements, sorted by key so teammates syncing the same matches can't deadlock. Re-running a sync never creates duplicates.
+- **Precomputed player stats.** Each sync rebuilds the player's `PlayerStats` row in one short, locked transaction. The leaderboard reads that one indexed table instead of every match row.
+- **MCP server for AI agents.** Three typed tools expose player stats, recent matches, and the leaderboard over stdio. Postgres enforces read-only access, every call is capped, and the server never calls an AI model itself.
+- **Observability.** OpenTelemetry traces every request through the cache, the upstream API, and each query. Custom metrics feed a preloaded Grafana dashboard.
+- **Tested at three levels, in CI.** 251 unit tests, 61 browser tests against the production build, and a k6 load test that fails the build if either page's p95 passes 250 ms. CI also lints, type-checks, audits dependencies, and boots the full Docker stack.
+- **Production Docker image.** A multi-stage build: 382 MB, non-root, with no source code or secrets inside.
 
 ## Architecture
 
@@ -41,208 +36,125 @@ flowchart LR
     services -->|cached reads| redis
     services -->|Prisma| postgres[(PostgreSQL)]
     app -.->|OTLP traces and metrics| lgtm[Grafana, Tempo, Prometheus]
-    agent([AI client, such as Claude]) -->|"MCP over stdio"| mcp[MCP server]
+    agent([AI client]) -->|"MCP over stdio"| mcp[MCP server]
     mcp -->|read-only transactions| postgres
 ```
 
 What happens when someone opens a profile:
 
-1. The page calls the profile service. It syncs the player's latest competitive matches into Postgres, unless they synced in the last 5 minutes.
-2. At the same time, rank, rank history, and the player card load from the HenrikDev API through the Redis cache. Failed lookups are cached too, so a missing player doesn't cost the API budget on every view.
-3. Once the sync finishes, it rebuilds the player's `PlayerStats` row and starts the cooldown in the same commit, and the 10 most recent matches are read from Postgres.
-4. K/D, ACS, ADR, win rate, and the tracker score are computed from those rows by pure functions in `src/services/stats.ts`.
-5. If any part fails, the page still renders and lists what failed.
+1. The profile service syncs the player's latest competitive matches into Postgres, unless they synced in the last 5 minutes.
+2. At the same time, rank, rank history, and the player card load from the HenrikDev API through the Redis cache.
+3. The sync rebuilds the player's `PlayerStats` row, and the 10 newest matches are read from Postgres.
+4. K/D, ACS, ADR, win rate, and the tracker score are computed by pure functions in `src/services/stats.ts`.
+5. If any part fails, the page still renders and says what failed.
 
-| Data | Cached for | Why |
-|---|---|---|
-| Player card and account | 1 hour | Changes only when the player edits their profile |
-| Rank and rank history | 5 minutes | Changes only after a match, and matches sync at most every 5 minutes |
-| Recent matches from Postgres | 60 seconds | Cleared whenever a sync writes new matches |
-| Raw match details | not cached | About 2 MB per 5 matches (v3 sent twice that), and the fields we need already live in Postgres |
-| Player not found, or no matches yet | 5 minutes | Repeat views of a missing player would otherwise spend the budget every time |
-| API errors and timeouts | 30 seconds | Long enough to stop repeat views from piling on, short enough to recover quickly |
+| Data | Cached for |
+|---|---|
+| Player card and account | 1 hour |
+| Rank and rank history | 5 minutes |
+| Recent matches from Postgres | 60 seconds, cleared when a sync writes new matches |
+| Player not found, or no matches yet | 5 minutes |
+| API errors and timeouts | 30 seconds |
 
-When HenrikDev misbehaves, each part of the page fails on its own and the rest still renders:
+When the upstream API misbehaves, each part of the page fails on its own:
 
 | Situation | What the app does |
 |---|---|
-| Hangs, or stalls mid-download | Each attempt times out (3 s, or 10 s for match data), with one retry inside a 7 s deadline. Match downloads are never retried: the first try was probably already charged |
-| 5xx, or connection refused | One retry after a random wait of up to 250 ms, only while at least 10 requests of budget are left |
-| 429 | No retry. Every instance pauses for as long as the API asked, and the page says live data is paused and for how long |
-| Budget reaches 0 | Pauses until the window resets, before the API has to refuse |
-| 5 failures in a row | A circuit breaker pauses calls for 30 s, then lets one probe through, with no retry, before resuming |
+| Hangs or stalls | Each attempt times out (3 s, or 10 s for match data), inside an overall deadline |
+| 5xx or connection refused | One retry after a random wait, only while rate-limit budget is left |
+| 429, or budget at 0 | No retry. Every instance pauses for as long as the API asked, and the page says so |
+| 5 failures in a row | A circuit breaker pauses calls for 30 s, then lets one probe through |
 
 ## Observability
 
-The app is instrumented with OpenTelemetry and sends traces and metrics over OTLP, so any compatible backend works. Locally, one command adds Grafana with Tempo for traces and Prometheus for metrics:
+Traces and metrics go out over OTLP, so any compatible backend works. Locally, one command adds Grafana, Tempo, and Prometheus, with the dashboard preloaded at http://localhost:3001:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
 ```
 
-Grafana runs at http://localhost:3001 with the StatTrack dashboard preloaded.
-
 ![Grafana dashboard showing profile load time, cache hit ratio, upstream calls, and the rate-limit budget](docs/grafana-dashboard.png)
 
-Below is a trace of a first-time profile view. The card and rank lookups run while the match sync is still going, and the match list loads once the sync finishes:
+A trace of a first-time profile view. The card and rank lookups run while the match sync is still going:
 
 ![Trace waterfall of one profile view in Grafana](docs/trace-waterfall.png)
 
-| Metric | Type | What it shows |
-|---|---|---|
-| `stattrack.profile.duration` | histogram, seconds | Time to load a whole profile |
-| `stattrack.cache.lookups` | counter | Cache hits, cached failures, misses, and errors by resource |
-| `stattrack.upstream.requests` | counter | HenrikDev attempts that got a response, by endpoint and HTTP status |
-| `stattrack.upstream.failures` | counter | Attempts that failed, by endpoint, error (timeout, or a network error code), and phase: no answer at all, or an answer whose body never finished |
-| `stattrack.upstream.retries` | counter | Retries by endpoint and reason |
-| `stattrack.upstream.short_circuits` | counter | Lookups answered locally during a cooldown, with no API call |
-| `stattrack.upstream.cooldowns` | counter | Cooldowns started, by trigger: 429, budget at zero, Retry-After, or the circuit breaker |
-| `stattrack.upstream.cooldown.remaining` | gauge, seconds | Time until this instance calls the API again |
-| `stattrack.upstream.invalid_payloads` | counter | Responses with no readable data, and items dropped because they couldn't be identified |
-| `stattrack.upstream.field_fallbacks` | counter | Fields that were missing, null, or the wrong type and became null, by field |
-| `stattrack.upstream.duration` | histogram, seconds | HenrikDev latency by endpoint |
-| `stattrack.upstream.ratelimit.remaining` | gauge | Requests left in the API's rate-limit window |
-| `stattrack.sync.runs` | counter | Sync attempts by outcome |
-
-Telemetry stays off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so tests and a plain `npm run dev` pay nothing for it. To use a hosted backend, set that variable and put its credentials in `OTEL_EXPORTER_OTLP_HEADERS`.
+The 13 custom metrics (all named `stattrack.*`) cover profile load time, cache hits and misses, upstream latency, failures, retries and cooldowns, the rate-limit budget, payload validation, and sync outcomes. Telemetry stays off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ## AI agent access (MCP)
 
-`src/mcp/` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so an AI assistant can answer questions like "who has the best K/D on StatTrack, and how did their last three matches go?" from this app's own data.
+`src/mcp/` is a [Model Context Protocol](https://modelcontextprotocol.io) server, so an AI assistant can answer questions like "who has the best K/D, and how did their last three matches go?" from this app's data.
 
 | Tool | Input | Returns |
 |---|---|---|
-| `get_leaderboard` | `sort`, `minMatches`, `limit` (up to 25) | Ranked players with record, tracker score, ACS, K/D, win rate, and headshot % |
-| `get_player_stats` | `riotId`, such as `TenZ#NA1` | One player's stats over their last 10 stored matches, and when they last synced |
-| `get_recent_matches` | `riotId`, `limit` (up to 10) | Newest matches with map, result, score, kills, deaths, assists, ACS, ADR, and headshot % |
+| `get_leaderboard` | `sort`, `minMatches`, `limit` | Ranked players with record, tracker score, ACS, K/D, and win rate |
+| `get_player_stats` | `riotId`, such as `TenZ#NA1` | One player's stats over their last 10 stored matches |
+| `get_recent_matches` | `riotId`, `limit` | Newest matches with map, result, score, K/D/A, ACS, and ADR |
 
-The tools reuse the website's queries and formulas, so they return the numbers the site shows. They only read what's already stored and never fetch new matches.
-
-To add it to Claude Code, run this from the repo:
+Add it to an MCP client with a command like this one for Claude Code, or the equivalent JSON config:
 
 ```bash
 claude mcp add stattrack --env DATABASE_URL="postgresql://..." -- npm --prefix "$PWD" run --silent mcp
 ```
 
-It's saved to your local Claude Code config only, not to the repo. If the server has exited after idling, reconnect it with `/mcp`.
+**Cost safeguards.** The server can't spend AI tokens by itself:
 
-For Claude Desktop or another client, add this to its MCP config. Desktop apps on macOS don't see your shell's `PATH`, so if the client can't find `npm`, use the full path from `which npm`.
+- It never calls a model and doesn't use MCP sampling. A CI test keeps it that way.
+- It only runs while a client has it open, and exits on disconnect or after 10 idle minutes.
+- At most 30 calls a minute and 300 per session, results capped at 16 KB, and 5 seconds of database time per call.
+- Every call runs in a `READ ONLY` transaction, and it never calls the HenrikDev API.
 
-```json
-{
-  "mcpServers": {
-    "stattrack": {
-      "command": "npm",
-      "args": ["--prefix", "/absolute/path/to/valorant-tracker", "run", "--silent", "mcp"],
-      "env": { "DATABASE_URL": "postgresql://..." }
-    }
-  }
-}
-```
-
-For a deployed database, give the server its own login that can only read:
-
-```sql
-CREATE ROLE stattrack_mcp LOGIN PASSWORD 'choose-one';
-GRANT USAGE ON SCHEMA public TO stattrack_mcp;
-GRANT SELECT ON "Player", "PlayerStats", "PlayerMatch", "Match" TO stattrack_mcp;
-```
-
-### Cost safeguards
-
-The server can't spend AI tokens or credits by itself. Tokens are only spent by the AI client you run, when you ask it something, under that client's own permission prompts and limits.
-
-- **It never calls a model.** The project has no AI SDK and calls no AI API. The server doesn't use MCP sampling, the one feature that lets a server ask the client's model to generate text. `src/mcp/guardrails.test.ts` fails CI if any of this changes.
-- **It only runs while a client has it open.** The client starts it on demand. It exits when the client closes the connection or quits, on `SIGINT` or `SIGTERM`, and after 10 minutes without a tool call. If the database is stuck, it's forced out within 2 seconds anyway. Nothing is scheduled; the only timers are the idle ones that shut it down.
-- **Every answer is bounded.** At most 30 tool calls a minute and 300 per session reach the database. Calls with invalid input are turned away before that with a one-line error. Results are compact JSON capped at 16 KB, about 4,000 tokens. A client message over 64 KB ends the session.
-- **Every call is time-limited.** Each call gets at most 5 seconds of database time. That holds even if the network goes silent mid-query, through Postgres's statement timeout, Prisma's socket timeout, and a deadline on the call itself.
-- **It can't write or spend the API quota.** Each call runs in a `READ ONLY` transaction, so Postgres rejects any write. It never calls the HenrikDev API.
-- **It lets the database sleep.** Database connections close after a minute without calls, so a serverless Postgres can scale to zero.
-
-Environment variables can lower these limits but never raise them: `MCP_CALLS_PER_MINUTE`, `MCP_CALLS_PER_SESSION`, `MCP_RESULT_BYTES`, `MCP_MESSAGE_BYTES`, `MCP_QUERY_TIMEOUT_MS`, `MCP_IDLE_RELEASE_MS`, and `MCP_IDLE_EXIT_MS`.
-
-## Tech stack
-
-TypeScript, Next.js 15 (App Router), React 19, Tailwind CSS 4, PostgreSQL 16, Prisma 6, Redis (Upstash), OpenTelemetry, Grafana, Docker, GitHub Actions.
+The `MCP_*` environment variables can lower these limits but never raise them.
 
 ## Getting started
 
-You need Node 22 or newer (see `.nvmrc`), Docker, and a [HenrikDev](https://docs.henrikdev.xyz) API key.
-
-### Run everything with Docker
+You need Node 22 or newer, Docker, and a [HenrikDev](https://docs.henrikdev.xyz) API key.
 
 ```bash
 cp .env.example .env    # then set HENRIKDEV_API_KEY
 docker compose up --build
 ```
 
-Open http://localhost:3000. Compose starts Postgres, Redis, a migration job, and the app, and waits for each one to be healthy before starting the next.
+Open http://localhost:3000. Compose starts Postgres, Redis, a migration job, and the app.
 
-### Develop locally
+To develop with hot reload instead:
 
 ```bash
 npm install
-cp .env.example .env    # then set HENRIKDEV_API_KEY
 docker compose up -d db cache migrate
 npm run dev
 ```
 
-In production the app reaches Redis through Upstash's REST API. Locally, [serverless-redis-http](https://github.com/hiett/serverless-redis-http) serves the same API in front of a plain Redis, so the app runs the same cache code in both places.
-
 | Command | What it does |
 |---|---|
-| `npm run dev` | Development server with hot reload |
-| `npm run build` | Production build |
-| `npm run lint` | ESLint |
-| `npm run typecheck` | TypeScript type check |
-| `npm test` | Unit tests with Vitest |
-| `npm run test:coverage` | Unit tests with a coverage report |
-| `npm run test:e2e` | End-to-end tests with Playwright |
-| `npm run e2e:serve` | Starts the mock API and the app on port 3100 for the end-to-end and load tests |
-| `npm run test:load` | k6 load test against `e2e:serve`, run through Docker |
-| `npm run db:backfill-stats` | Rebuilds every player's `PlayerStats` row. Needs an explicit `DATABASE_URL`; safe to re-run |
-| `npm run mcp` | The MCP server over stdio. AI clients start it themselves; needs an explicit `DATABASE_URL` |
+| `npm run dev` / `npm run build` | Development server, production build |
+| `npm run lint` / `npm run typecheck` | ESLint, TypeScript |
+| `npm test` | Unit tests (Vitest) |
+| `npm run test:e2e` | Browser tests (Playwright). Needs `docker compose up -d db cache` and a build |
+| `npm run test:load` | k6 load test against `npm run e2e:serve` |
+| `npm run mcp` | The MCP server over stdio. Needs an explicit `DATABASE_URL` |
 
 ## Testing
 
 | Level | Tool | What it covers |
 |---|---|---|
-| Unit | Vitest | Stat math, sync, caching, tracing, and input parsing. Payload validation: one bad field or match never discards the rest, and reports never contain upstream values. The upstream client's timeouts, retries, cooldowns, and circuit breaker, on fake timers. The cache client giving up fast, against real sockets. MCP tools through an in-memory client, their call budget, size cap, and idle timers, and the cost guardrails. The database and `fetch` are mocked, so the suite runs in about a second |
-| End to end | Playwright | Searching, the profile page's numbers, caching across reloads, an unknown player, recent searches, and the JSON API, all in a real browser against the production build. Also the `PlayerStats` table on a real database (re-syncs, concurrent syncs, the row lock, the backfill), the leaderboard's ranking, sorting, and filtering, the MCP server over real stdio (its answers, a clean stdout, Postgres rejecting writes, a database that goes silent mid-call, and exiting on disconnect, SIGTERM, idle, or an oversized message), and how the app handles a misbehaving API: scripted 429s, 503s, hung and stalled responses, cached failures, shared cooldowns, the nightly job waiting as asked, partial and unreadable match data, and teammates syncing the same matches without deadlocking |
-| Load | k6 | 20 requests per second each to the cached profile page and the leaderboard, for 30 seconds. Fails if either page's p95 passes 250 ms or more than 1% of requests fail |
+| Unit | Vitest | Stat math, sync, caching, payload validation, the API client's timeouts, retries, cooldowns and circuit breaker, and the MCP tools and their limits |
+| End to end | Playwright | Search, profile numbers, the leaderboard, and phone layout in a real browser. Also concurrent syncs and row locks on a real database, the MCP server over real stdio, and a misbehaving API: 429s, 503s, hangs, and unreadable data |
+| Load | k6 | 20 requests per second to each page for 30 seconds. Fails above a 250 ms p95 or 1% errors |
 
-The end-to-end and load tests use a mock of the HenrikDev API (`e2e/mock-henrik.mjs`), so they are deterministic and never spend the real API's rate limit. Tests can script its failures per player and endpoint. They also use their own `valorant_e2e` database, set to a non-UTC time zone so a timestamp stored in the wrong zone shows up as hours off.
-
-```bash
-docker compose up -d db cache
-npm run build
-npm run test:e2e
-```
-
-For the load test, start `npm run e2e:serve` in one terminal and run `npm run test:load` in another.
-
+The browser and load tests run against a mock of the HenrikDev API, so they are deterministic and never spend the real rate limit.
 
 ## Configuration
 
 | Variable | Required | Description |
 |---|---|---|
 | `DATABASE_URL` | yes | PostgreSQL connection string |
-| `UPSTASH_REDIS_REST_URL` | yes | Redis REST endpoint: Upstash, or the local proxy |
-| `UPSTASH_REDIS_REST_TOKEN` | yes | Token for that endpoint |
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | yes | Redis REST endpoint and token: Upstash, or the local proxy |
 | `HENRIKDEV_API_KEY` | yes | HenrikDev API key |
-| `HENRIKDEV_BASE_URL` | no | Base URL of the HenrikDev API. Tests point it at a mock |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Where to send traces and metrics. Telemetry is off when it's unset |
-| `OTEL_EXPORTER_OTLP_HEADERS` | no | Auth headers for a hosted OTLP backend |
-| `OTEL_SERVICE_NAME` | no | Service name on traces and metrics. Defaults to `valorant-stattrack` |
-| `CRON_SECRET` | for the nightly sync | Secret that `POST /api/sync` requires as a bearer token. At least 32 characters: `openssl rand -hex 32`. Without it the endpoint stays closed (503); profile pages are unaffected |
-| `MCP_*` | no | Lower the MCP server's limits. See [Cost safeguards](#cost-safeguards) |
+| `CRON_SECRET` | for the nightly sync | Bearer secret that `POST /api/sync` requires. At least 32 characters: `openssl rand -hex 32` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no | Where to send traces and metrics |
 
-The nightly workflow reads three GitHub Actions secrets:
-- `BASE_URL`: the deployed app.
-- `CRON_SECRET`: the same value as the app's `CRON_SECRET`.
-- `SYNC_PLAYERS`: a JSON array of players. List them by PUUID, which survives renames: `[{"puuid":"54942ced-..."}]`. `{"name":"PlayerName","tag":"NA1"}` entries still work, but stop matching if the player renames. To find a tracked player's PUUID, run this read-only query: `SELECT puuid FROM "Player" WHERE "riotIdKey" = lower('PlayerName#NA1');`.
-
-The run fails, and shows red, when any player fails (exit 1) or the setup is wrong (exit 2). Its summary page lists every player's outcome.
+The nightly workflow reads three GitHub Actions secrets: `BASE_URL` (the deployed app), `CRON_SECRET` (the same value as the app's), and `SYNC_PLAYERS`, a JSON array such as `[{"puuid":"54942ced-..."}]`. The run fails loudly, with a per-player summary, when any player fails.
 
 ## API
 
@@ -251,66 +163,29 @@ The run fails, and shows red, when any player fails (exit 1) or the setup is wro
 | `GET` | `/api/player?name=&tag=` | Account details and player card |
 | `GET` | `/api/overall?region=&name=&tag=` | Current and peak rank |
 | `GET` | `/api/elo?region=&name=&tag=` | Rank change for each recent match |
-| `POST` | `/api/sync?region=&name=&tag=&size=` or `?region=&puuid=&size=` | Pulls up to 10 recent matches into Postgres, for a Riot ID or an already-tracked PUUID. Needs `Authorization: Bearer <CRON_SECRET>` (401 without it, 503 if the server has no secret). Every answer has an `outcome`: 409 with `Retry-After` while another sync of the player runs, 404 for an untracked PUUID, 502 if HenrikDev's match data can't be read |
 | `GET` | `/api/db/matches?name=&tag=&limit=` | Recent matches from Postgres |
-| `GET` | `/api/leaderboard?sort=&minMatches=&limit=` | Top players. `sort` is `trackerScore` (default), `acs`, `kd`, or `winRate`; `minMatches` 1 to 10 (default 5); `limit` 1 to 100 (default 25) |
+| `GET` | `/api/leaderboard?sort=&minMatches=&limit=` | Top players by `trackerScore`, `acs`, `kd`, or `winRate` |
+| `POST` | `/api/sync?name=&tag=` or `?puuid=` | Pulls recent matches into Postgres. Needs `Authorization: Bearer <CRON_SECRET>` |
 | `GET` | `/api/health` | Database and cache status |
-
-`region` defaults to `na` and must be one of `na`, `eu`, `ap`, `kr`, `latam`, or `br`. Cached endpoints return an `x-cache` header set to `HIT` or `MISS`. Endpoints backed by HenrikDev pass its status through. During a rate-limit or outage cooldown they answer 429 or 503 with a `Retry-After` header, they answer 504 when it doesn't respond in time, and 502 when it can't be reached.
 
 ## Project structure
 
 ```
 src/
-  app/
-    api/                   route handlers: parse input, call a service
-    player/[name]/[tag]/   player profile page
-    leaderboard/           leaderboard page
-  instrumentation.ts       starts OpenTelemetry when an endpoint is configured
-  components/              UI components
-  services/
-    profile.ts             loads everything the player page shows
-    sync.ts                pulls recent matches into Postgres
-    player-stats.ts        rebuilds a player's PlayerStats row in one locked transaction
-    leaderboard.ts         ranks players from PlayerStats; validates sort and filters
-    matches.ts             reads recent matches from Postgres, cached
-    match-rows.ts          the one query both the page and the stats use
-    stats.ts               K/D, ACS, ADR, win rate, and tracker score
-  mcp/
-    main.ts                stdio entry point: startup checks, idle exit, shutdown
-    server.ts              registers the tools and wraps every call in the guards
-    tools.ts               what each tool reads and returns
-    read-only.ts           the read-only transaction, deadlines, and idle connection release
-    limits.ts              hard caps and the call budget
-    activity.ts            idle timers that close connections and exit
-  lib/
-    henrik.ts              HenrikDev client: auth, URLs, caching, timeouts, retries
-    henrik-limits.ts       rate-limit headers, shared cooldowns, retry budget, circuit breaker
-    henrik-schemas.ts      zod schemas for HenrikDev payloads: strict IDs, every other field falls back to null
-    redis.ts               cache client that fails fast, and cooldown storage
-    prisma.ts              database client
-    riot-id.ts             input parsing and region allowlist
-    telemetry.ts           spans and custom metrics
-observability/             Grafana dashboard and provisioning
-e2e/                       Playwright tests, the mock HenrikDev API, and its test data
-load/                      k6 load test
-prisma/                    schema and migrations
-scripts/                   nightly ingestion job and the stats backfill
+  app/          pages (home, player profile, leaderboard) and API routes
+  components/   UI components
+  services/     profile loading, sync, player stats, leaderboard, stat math
+  lib/          HenrikDev client, rate-limit handling, zod schemas, Redis, telemetry
+  mcp/          the MCP server: tools, read-only transactions, limits, idle exit
+e2e/            Playwright tests and the mock HenrikDev API
+load/           k6 load test
+prisma/         schema and migrations
+scripts/        nightly sync job and the stats backfill
 ```
 
-Unit tests sit next to the code they cover, as `*.test.ts`.
+## Tech stack
 
-## Roadmap
-
-- [x] Unit tests with Vitest
-- [x] CI on every pull request and push to main
-- [x] End-to-end and load tests
-- [x] OpenTelemetry traces, metrics, and a Grafana dashboard
-- [x] Precomputed per-player stats
-- [x] Leaderboard page and API backed by those stats
-- [x] MCP server so AI agents can query player stats
-- [x] Timeouts, retries with backoff, and rate-limit handling for upstream calls
-- [x] Validate upstream payloads, and move match data to HenrikDev's v4 endpoint
+TypeScript, Next.js 15 (App Router), React 19, Tailwind CSS 4, PostgreSQL 16, Prisma 6, Redis (Upstash), OpenTelemetry, Grafana, Docker, GitHub Actions.
 
 ---
 
