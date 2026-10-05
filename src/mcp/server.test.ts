@@ -159,8 +159,8 @@ describe("get_leaderboard", () => {
   it("ranks players from PlayerStats inside the read-only transaction, rounded like the site", async () => {
     const { tx, deps, call } = await setup();
     tx.playerStats.findMany.mockResolvedValue([
-      { ...STATS, player: { name: "Ace", tag: "NA1" } },
-      { ...STATS, playerId: "p2", trackerScore: 40, player: { name: "Rookie", tag: "NA1" } },
+      { ...STATS, player: { name: "Ace", tag: "NA1", riotIdKey: "ace#na1" } },
+      { ...STATS, playerId: "p2", trackerScore: 40, player: { name: "Rookie", tag: "NA1", riotIdKey: null } },
     ]);
 
     const res = await call("get_leaderboard", { sort: "kd" });
@@ -186,23 +186,21 @@ describe("get_leaderboard", () => {
           winRate: 60,
           headshotPct: 25,
         },
-        expect.objectContaining({ rank: 1, player: "Rookie#NA1", trackerScore: 40 }),
+        // Rookie's Riot ID now belongs to someone else, which the answer says.
+        expect.objectContaining({ rank: 1, player: "Rookie#NA1", trackerScore: 40, renamedAway: true }),
       ],
     });
   });
 });
 
 describe("get_player_stats", () => {
-  it("returns the stored stats for an exact Riot ID without the case-insensitive fallback", async () => {
+  it("returns the stored stats, looking the player up by their Riot ID key", async () => {
     const { tx, call } = await setup();
 
     const res = await call("get_player_stats", { riotId: "Tester#E2E" });
 
     expect(res.isError).toBe(false);
-    expect(tx.player.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { name_tag: { name: "Tester", tag: "E2E" } } }),
-    );
-    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.player.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { riotIdKey: "tester#e2e" } }));
     expect(res.json()).toEqual({
       player: "Tester#E2E",
       matches: 10,
@@ -221,17 +219,13 @@ describe("get_player_stats", () => {
     });
   });
 
-  it("falls back to a case-insensitive match with lower(), not ILIKE wildcards", async () => {
+  it("finds the player in any capitalization, with spaces around the parts", async () => {
     const { tx, call } = await setup();
-    tx.player.findUnique.mockResolvedValue(null);
-    tx.$queryRaw.mockResolvedValue([PLAYER]);
 
-    const res = await call("get_player_stats", { riotId: "  tester # e2e " });
+    const res = await call("get_player_stats", { riotId: "  tESTER # e2E " });
 
     expect(res.json()).toMatchObject({ player: "Tester#E2E" });
-    const [sql, name, tag] = tx.$queryRaw.mock.calls[0];
-    expect(sql.join("?")).toContain("lower(name) = lower(?) AND lower(tag) = lower(?)");
-    expect([name, tag]).toEqual(["tester", "e2e"]);
+    expect(tx.player.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { riotIdKey: "tester#e2e" } }));
   });
 
   it("says when a player isn't tracked, as a tool error", async () => {

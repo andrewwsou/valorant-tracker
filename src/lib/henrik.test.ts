@@ -195,7 +195,7 @@ describe("getMatches", () => {
   it("doesn't cache a successful response, because the payload is several megabytes", async () => {
     fetchMock.mockResolvedValue(upstream(200, { data: [{ metadata: { matchid: "m1" } }] }));
 
-    await getMatches("na", "enzo", "yyy", { size: 10, mode: "competitive" });
+    await getMatches({ region: "na", name: "enzo", tag: "yyy" }, { size: 10, mode: "competitive" });
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://api.henrikdev.xyz/valorant/v4/matches/na/pc/enzo/yyy?size=10&mode=competitive",
@@ -203,18 +203,29 @@ describe("getMatches", () => {
     expect(cacheSetJson).not.toHaveBeenCalled();
   });
 
+  it("fetches by PUUID from the by-puuid endpoint, under its own key, keeping the PUUID's case", async () => {
+    fetchMock.mockResolvedValue(upstream(404, { errors: [] }));
+
+    await getMatches({ region: "eu", puuid: "Ab-12_Cd" }, { size: 5, mode: "competitive" });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.henrikdev.xyz/valorant/v4/by-puuid/matches/eu/pc/Ab-12_Cd?size=5&mode=competitive",
+    );
+    expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:v4:pc:puuid:eu:Ab-12_Cd:competitive", expect.anything(), 300);
+  });
+
   it("caches a not-found answer and an empty match history for 5 minutes", async () => {
     fetchMock.mockResolvedValueOnce(upstream(404, { errors: [] }));
-    await getMatches("na", "Ghost", "0000", { size: 10, mode: "competitive" });
+    await getMatches({ region: "na", name: "Ghost", tag: "0000" }, { size: 10, mode: "competitive" });
     fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data: [] }));
-    await getMatches("na", "Fresh", "0001", { size: 10, mode: "competitive" });
+    await getMatches({ region: "na", name: "Fresh", tag: "0001" }, { size: 10, mode: "competitive" });
 
     expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:v4:pc:na:ghost:0000:competitive", expect.anything(), 300);
     expect(cacheSetJson).toHaveBeenCalledWith("henrik:v1:matches:v4:pc:na:fresh:0001:competitive", expect.anything(), 300);
   });
 
   it("remembers an unreadable match list for 30 seconds as a small 502 under the same key", async () => {
-    await rememberUnreadableMatches("na", "Odd", "0000", "competitive");
+    await rememberUnreadableMatches({ region: "na", name: "Odd", tag: "0000" }, "competitive");
 
     const [key, value, ttl] = vi.mocked(cacheSetJson).mock.calls[0];
     expect(key).toBe("henrik:v1:matches:v4:pc:na:odd:0000:competitive");
@@ -224,14 +235,14 @@ describe("getMatches", () => {
 
     // The next lookup is answered from the cache without calling upstream.
     vi.mocked(cacheGetJson).mockResolvedValue(value);
-    await expect(getMatches("na", "odd", "0000", { size: 10, mode: "competitive" })).resolves.toMatchObject({ status: 502, cache: "HIT" });
+    await expect(getMatches({ region: "na", name: "odd", tag: "0000" }, { size: 10, mode: "competitive" })).resolves.toMatchObject({ status: 502, cache: "HIT" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("caches a small answer without a readable match list briefly, like a failure", async () => {
     fetchMock.mockResolvedValueOnce(upstream(200, { status: 200, data: null }));
 
-    await getMatches("na", "odd", "0000", { size: 10, mode: "competitive" });
+    await getMatches({ region: "na", name: "odd", tag: "0000" }, { size: 10, mode: "competitive" });
 
     expect(cacheSetJson).toHaveBeenCalledWith(expect.stringContaining(":odd:"), expect.anything(), NEGATIVE_TTL_SECONDS.failure);
   });
@@ -266,7 +277,7 @@ describe("timeouts and retries", () => {
   it("never retries a matches timeout: it was probably already charged, and it's 7 MB", async () => {
     fetchMock.mockImplementation(hang);
 
-    const { result, elapsed } = await timed(getMatches("na", "enzo", "yyy", { size: 10, mode: "competitive" }));
+    const { result, elapsed } = await timed(getMatches({ region: "na", name: "enzo", tag: "yyy" }, { size: 10, mode: "competitive" }));
 
     expect(result.status).toBe(504);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -302,7 +313,7 @@ describe("timeouts and retries", () => {
 
     fetchMock.mockReset();
     fetchMock.mockImplementation(cutOffBody);
-    const { result: matches } = await timed(getMatches("na", "enzo", "yyy", { size: 10, mode: "competitive" }));
+    const { result: matches } = await timed(getMatches({ region: "na", name: "enzo", tag: "yyy" }, { size: 10, mode: "competitive" }));
     expect(matches.status).toBe(502);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -322,7 +333,7 @@ describe("timeouts and retries", () => {
       () => new Promise((resolve) => setTimeout(() => resolve(upstream(503, { errors: [] })), 7_500)),
     );
 
-    const { result } = await timed(getMatches("na", "enzo", "yyy", { size: 10, mode: "competitive" }));
+    const { result } = await timed(getMatches({ region: "na", name: "enzo", tag: "yyy" }, { size: 10, mode: "competitive" }));
 
     expect(result.status).toBe(503);
     expect(fetchMock).toHaveBeenCalledTimes(1);

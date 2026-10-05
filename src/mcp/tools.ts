@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import type { Prisma } from "@/generated/prisma";
+import { riotIdKey } from "@/lib/riot-id";
 import { getLeaderboard, LEADERBOARD_DEFAULTS, LEADERBOARD_SORTS } from "@/services/leaderboard";
 import { findRecentMatchRows } from "@/services/match-rows";
 import { matchStats, RECENT_MATCH_WINDOW } from "@/services/stats";
@@ -57,27 +58,13 @@ const notTracked = (id: string): ToolAnswer => ({
   message: `No tracked player named ${id}. A player is tracked once their profile has been opened on the StatTrack site.`,
 });
 
-/**
- * Finds a player by Riot ID: an exact match first (uses the unique index), then
- * ignoring case, because Riot IDs aren't case-sensitive. If rows differing only
- * in case exist, the most recently synced one wins.
- */
-async function findPlayer(db: Db, id: string): Promise<PlayerRef | null> {
+/** Finds the player who has this Riot ID now, in any capitalization. */
+function findPlayer(db: Db, id: string): Promise<PlayerRef | null> {
   const [name, tag] = id.split("#").map((part) => part.trim());
-  const exact = await db.player.findUnique({
-    where: { name_tag: { name, tag } },
+  return db.player.findUnique({
+    where: { riotIdKey: riotIdKey(name, tag) },
     select: { id: true, name: true, tag: true, lastSyncedAt: true },
   });
-  if (exact) return exact;
-
-  // lower() = lower() rather than Prisma's case-insensitive mode, which uses ILIKE,
-  // where "_" and "%" in a name would act as wildcards.
-  const [match] = await db.$queryRaw<PlayerRef[]>`
-    SELECT id, name, tag, "lastSyncedAt" FROM "Player"
-    WHERE lower(name) = lower(${name}) AND lower(tag) = lower(${tag})
-    ORDER BY "lastSyncedAt" DESC NULLS LAST
-    LIMIT 1`;
-  return match ?? null;
 }
 
 export async function leaderboardAnswer(db: Db, input: z.output<typeof leaderboardInput>): Promise<ToolAnswer> {
@@ -90,6 +77,8 @@ export async function leaderboardAnswer(db: Db, input: z.output<typeof leaderboa
       players: entries.map((e) => ({
         rank: e.rank,
         player: label(e),
+        // This Riot ID now belongs to someone else: the player renamed since.
+        ...(e.linked ? {} : { renamedAway: true }),
         matches: e.matches,
         wins: e.wins,
         losses: e.losses,

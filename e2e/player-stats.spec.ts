@@ -104,6 +104,9 @@ test("concurrent syncs of one player neither fail nor double count", async ({ re
   );
 
   for (const res of responses) expect(res.status(), await res.text()).toBe(200);
+  // One of them called upstream; the others waited for it.
+  const outcomes = await Promise.all(responses.map(async (r) => (await r.json()).outcome));
+  expect(outcomes.filter((o) => o === "synced")).toHaveLength(1);
   const player = await testPlayer();
   expect(await db.playerMatch.count({ where: { playerId: player.id } })).toBe(10);
   expect(await db.playerStats.count({ where: { playerId: player.id } })).toBe(1);

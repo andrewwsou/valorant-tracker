@@ -67,6 +67,8 @@ services:
       UPSTASH_REDIS_REST_URL: http://cache:80
       UPSTASH_REDIS_REST_TOKEN: local-dev-token
       HENRIKDEV_API_KEY: ${HENRIKDEV_API_KEY:?Set HENRIKDEV_API_KEY in your shell or in .env}
+      # Optional: lets the nightly job call POST /api/sync. Without it that endpoint stays closed.
+      CRON_SECRET: ${CRON_SECRET:-}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

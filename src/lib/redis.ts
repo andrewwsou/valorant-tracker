@@ -56,3 +56,30 @@ return 0`;
 export async function extendUntil(key: string, untilMs: number): Promise<boolean> {
   return (await redis.eval(EXTEND_UNTIL_SCRIPT, [key], [String(Math.round(untilMs))])) === 1;
 }
+
+/**
+ * Takes a short-lived lock: true if this caller got it, false if someone else holds it.
+ * `token` identifies the holder, so only they can release it.
+ */
+export async function claimLock(key: string, token: string, ttlMs: number, client: Redis = redis): Promise<boolean> {
+  if ((await client.set(key, token, { nx: true, px: ttlMs })) === "OK") return true;
+  // The client retries a request whose reply was lost. If the first try landed, the
+  // retry sees our own lock and fails, so check whose lock it is before giving up.
+  return (await client.get<string>(key)) === token;
+}
+
+// Deletes the key only if it still holds this caller's token, so an expired lock that
+// someone else has since taken is never released by mistake. Atomic.
+const RELEASE_SCRIPT = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0`;
+
+export async function releaseLock(key: string, token: string): Promise<void> {
+  await redis.eval(RELEASE_SCRIPT, [key], [token]);
+}
+
+export async function lockHeld(key: string): Promise<boolean> {
+  return (await redis.exists(key)) === 1;
+}

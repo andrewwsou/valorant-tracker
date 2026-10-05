@@ -33,6 +33,11 @@ describe("requireCronSecret", () => {
     expect(requireCronSecret(request(`bearer ${SECRET}`))).toBeNull();
   });
 
+  it("ignores whitespace pasted around the configured secret", () => {
+    vi.stubEnv("CRON_SECRET", `  ${SECRET}\n`);
+    expect(requireCronSecret(request(`Bearer ${SECRET}`))).toBeNull();
+  });
+
   it("reads the secret on every request", () => {
     vi.stubEnv("CRON_SECRET", SECRET);
     expect(requireCronSecret(request(`Bearer ${SECRET}`))).toBeNull();

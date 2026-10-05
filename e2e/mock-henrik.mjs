@@ -6,7 +6,7 @@
 // timeouts, retries, and rate limiting against real HTTP. See scriptedStep() below.
 import http from "node:http";
 import { MOCK_API_PORT, TEST_API_KEY } from "./env.mjs";
-import { findPlayer } from "./fixtures.mjs";
+import { findPlayer, findPlayerByPuuid } from "./fixtures.mjs";
 
 const ENDPOINTS = ["account", "mmr", "mmr-history", "matches"];
 
@@ -18,16 +18,28 @@ const callsByName = new Map();
 const scripts = new Map();
 /** Connections left hanging on purpose, so /__reset can close them. */
 const hanging = new Set();
+/** Paths of the data requests received since the last reset, so tests can see which endpoints were used. */
+const requests = [];
+
+const matchList = (p, query) => p.matches.slice(0, Number(query.get("size") ?? p.matches.length));
+/** By Riot ID: counted and scripted under the name. */
+const byRiotId = (m) => {
+  const name = decodeURIComponent(m[1]);
+  return { name, player: findPlayer(name, decodeURIComponent(m[2])) };
+};
+/** By PUUID: counted and scripted under a known player's name, or else the PUUID itself. */
+const byPuuid = (m) => {
+  const puuid = decodeURIComponent(m[1]);
+  const player = findPlayerByPuuid(puuid);
+  return { name: player?.name ?? puuid, player };
+};
 
 const routes = [
-  { endpoint: "account", pattern: /^\/valorant\/v1\/account\/([^/]+)\/([^/]+)$/, data: (p) => p.account },
-  { endpoint: "mmr", pattern: /^\/valorant\/v2\/mmr\/[^/]+\/([^/]+)\/([^/]+)$/, data: (p) => p.mmr },
-  { endpoint: "mmr-history", pattern: /^\/valorant\/v1\/mmr-history\/[^/]+\/([^/]+)\/([^/]+)$/, data: (p) => p.mmrHistory },
-  {
-    endpoint: "matches",
-    pattern: /^\/valorant\/v4\/matches\/[^/]+\/pc\/([^/]+)\/([^/]+)$/,
-    data: (p, query) => p.matches.slice(0, Number(query.get("size") ?? p.matches.length)),
-  },
+  { endpoint: "account", pattern: /^\/valorant\/v1\/account\/([^/]+)\/([^/]+)$/, who: byRiotId, data: (p) => p.account },
+  { endpoint: "mmr", pattern: /^\/valorant\/v2\/mmr\/[^/]+\/([^/]+)\/([^/]+)$/, who: byRiotId, data: (p) => p.mmr },
+  { endpoint: "mmr-history", pattern: /^\/valorant\/v1\/mmr-history\/[^/]+\/([^/]+)\/([^/]+)$/, who: byRiotId, data: (p) => p.mmrHistory },
+  { endpoint: "matches", pattern: /^\/valorant\/v4\/matches\/[^/]+\/pc\/([^/]+)\/([^/]+)$/, who: byRiotId, data: matchList },
+  { endpoint: "matches", pattern: /^\/valorant\/v4\/by-puuid\/matches\/[^/]+\/pc\/([^/]+)$/, who: byPuuid, data: matchList },
 ];
 
 const DEFAULT_HEADERS = { "content-type": "application/json", "x-ratelimit-remaining": "30" };
@@ -113,8 +125,10 @@ http
       scripts.set(key, [...(scripts.get(key) ?? []), ...steps]);
       return send(res, 200, { ok: true });
     }
+    if (url.pathname === "/__requests") return send(res, 200, requests);
     if (url.pathname === "/__reset" && req.method === "POST") {
       scripts.clear();
+      requests.length = 0;
       for (const r of hanging) r.socket?.destroy();
       hanging.clear();
       return send(res, 200, { ok: true });
@@ -128,7 +142,8 @@ http
     for (const route of routes) {
       const match = url.pathname.match(route.pattern);
       if (!match) continue;
-      const name = decodeURIComponent(match[1]);
+      const { name, player } = route.who(match);
+      requests.push(url.pathname);
       calls[route.endpoint]++;
       const counts = callsByName.get(name.toLowerCase()) ?? Object.fromEntries(ENDPOINTS.map((e) => [e, 0]));
       counts[route.endpoint]++;
@@ -137,7 +152,6 @@ http
       const step = scriptedStep(route.endpoint, name);
       if (step) return playStep(step, res, route, url.searchParams);
 
-      const player = findPlayer(name, decodeURIComponent(match[2]));
       if (!player) return notFound(res);
       return send(res, 200, { status: 200, data: route.data(player, url.searchParams) });
     }

@@ -127,6 +127,29 @@ test.describe("the nightly job", () => {
     expect(run.summary).toContain("| Nobody#E2E | ❌ upstream-error | 404 |");
   });
 
+  test("syncs players listed by PUUID, and names each one in the summary", async () => {
+    const run = await runNightly({
+      SYNC_PLAYERS: JSON.stringify([{ puuid: "e2e-puuid-tester" }, { puuid: "e2e-puuid-nobody" }]),
+    });
+
+    expect(run.code).toBe(1);
+    expect(run.stdout).not.toContain("players listed by Riot ID");
+    expect(run.stdout).toMatch(/Tester#E2E: (synced|skipped) \(HTTP 200\)/);
+    expect(run.stdout).toContain("::error title=Nightly sync::puuid:e2e-puui: not-tracked (HTTP 404)");
+    expect(run.summary).toContain("| puuid:e2e-puui | ❌ not-tracked | 404 |");
+  });
+
+  test("treats HenrikDev refusing the API key as that player's failure, not a wrong secret", async () => {
+    // A name of its own: an earlier test's 404 for another name stays cached for 5 minutes.
+    const name = `KeyRevoked${Date.now().toString(36)}`;
+    await script("matches", name, [{ status: 401 }]);
+
+    const run = await runNightly({ SYNC_PLAYERS: players({ name, tag: "E2E" }) });
+
+    expect(run.code).toBe(1);
+    expect(run.stdout).toContain(`::error title=Nightly sync::${name}#E2E: upstream-auth (HTTP 502) HenrikDev refused the app's API key (HTTP 401)`);
+  });
+
   test("exits 2, before syncing anyone, when the app refuses the secret", async () => {
     const name = `Locked${Date.now().toString(36)}`;
 
@@ -141,7 +164,8 @@ test.describe("the nightly job", () => {
     for (const [env, message] of [
       [{ SYNC_PLAYERS: "" }, "SYNC_PLAYERS must be a JSON array"],
       [{ SYNC_PLAYERS: "[]" }, "SYNC_PLAYERS must be a non-empty JSON array"],
-      [{ SYNC_PLAYERS: '[{"name":"Tester"}]' }, "SYNC_PLAYERS[0] needs a name and a tag"],
+      [{ SYNC_PLAYERS: '[{"name":"Tester"}]' }, "SYNC_PLAYERS[0] needs a puuid, or a name and a tag"],
+      [{ SYNC_PLAYERS: '[{"puuid":"../v1"}]' }, "SYNC_PLAYERS[0] has an invalid puuid"],
       [{ SYNC_PLAYERS: players({ name: "Tester", tag: "E2E" }), CRON_SECRET: "" }, "CRON_SECRET is not set"],
       [{ SYNC_PLAYERS: players({ name: "Tester", tag: "E2E" }), BASE_URL: "http://example.com" }, "BASE_URL must use https"],
     ] as const) {

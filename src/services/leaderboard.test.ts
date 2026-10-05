@@ -25,7 +25,7 @@ function statsRow(name: string, overrides: Record<string, unknown> = {}) {
     totalMatches: 10,
     lastMatchAt: new Date("2026-09-20T18:00:00Z"),
     updatedAt: new Date("2026-10-04T12:00:00Z"),
-    player: { name, tag: "NA1" },
+    player: { name, tag: "NA1", riotIdKey: `${name.toLowerCase()}#na1` },
     ...overrides,
   };
 }
@@ -71,8 +71,19 @@ describe("getLeaderboard", () => {
       where: { matches: { gte: 5 } },
       orderBy: [{ acs: "desc" }, { playerId: "asc" }],
       take: 25,
-      include: { player: { select: { name: true, tag: true } } },
+      include: { player: { select: { name: true, tag: true, riotIdKey: true } } },
     });
+  });
+
+  it("doesn't link a player whose Riot ID now belongs to someone else", async () => {
+    db.playerStats.findMany.mockResolvedValue([statsRow("Ace"), statsRow("Renamed", { player: { name: "Renamed", tag: "NA1", riotIdKey: null } })]);
+
+    const entries = await getLeaderboard({ sort: "trackerScore", minMatches: 5, limit: 25 });
+
+    expect(entries.map((e) => [e.name, e.linked])).toEqual([
+      ["Ace", true],
+      ["Renamed", false],
+    ]);
   });
 
   it("returns ranked entries with the player's Riot ID and ISO dates", async () => {

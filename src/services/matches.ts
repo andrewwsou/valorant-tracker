@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { cacheDelete, cacheGetJson, cacheSetJson } from "@/lib/redis";
+import { riotIdKey } from "@/lib/riot-id";
 import { cacheLookups, withSpan } from "@/lib/telemetry";
 import { findRecentMatchRows, type MatchRow } from "@/services/match-rows";
 
@@ -16,13 +17,14 @@ const NOT_FOUND_TTL_SECONDS = 15;
 /** Limits the app asks for, so a sync can clear every cached variant. */
 const KNOWN_LIMITS = [10, 25];
 
-function recentMatchesKey(name: string, tag: string, limit: number) {
-  return `dbmatches:v2:${name.toLowerCase()}:${tag.toLowerCase()}:limit=${limit}`;
+/** Keyed by the player's Riot ID key (see riotIdKey), the same one the database looks them up by. */
+function recentMatchesKey(key: string, limit: number) {
+  return `dbmatches:v3:${key}:limit=${limit}`;
 }
 
-/** Clears cached match lists for a player. Called after a sync writes new rows. */
-export async function invalidateRecentMatches(name: string, tag: string) {
-  await cacheDelete(...KNOWN_LIMITS.map((limit) => recentMatchesKey(name, tag, limit)));
+/** Clears cached match lists for a Riot ID key. Called after a sync writes new rows. */
+export async function invalidateRecentMatches(key: string) {
+  await cacheDelete(...KNOWN_LIMITS.map((limit) => recentMatchesKey(key, limit)));
 }
 
 /**
@@ -35,7 +37,8 @@ export async function getRecentMatches(
   limit: number,
 ): Promise<RecentMatches & { cache: "HIT" | "MISS" }> {
   return withSpan("matches.recent", { "matches.limit": limit }, async (span) => {
-    const key = recentMatchesKey(name, tag, limit);
+    const playerKey = riotIdKey(name, tag);
+    const key = recentMatchesKey(playerKey, limit);
 
     try {
       const cached = await cacheGetJson<RecentMatches>(key);
@@ -51,8 +54,9 @@ export async function getRecentMatches(
     }
     span.setAttribute("cache.hit", false);
 
+    // Any capitalization finds the player who has this Riot ID now.
     const player = await prisma.player.findUnique({
-      where: { name_tag: { name, tag } },
+      where: { riotIdKey: playerKey },
       select: { id: true, name: true, tag: true, puuid: true },
     });
 
@@ -60,7 +64,7 @@ export async function getRecentMatches(
       const payload: RecentMatches = {
         player: null,
         data: [],
-        message: "Player not found in DB. Run /api/sync first.",
+        message: "Player not found. Open their profile to start tracking them.",
       };
       try {
         await cacheSetJson(key, payload, NOT_FOUND_TTL_SECONDS);

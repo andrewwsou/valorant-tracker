@@ -30,18 +30,22 @@ model Match {
   @@index([startedAt])
 }
 
+/// A player is their PUUID, which never changes. The Riot ID (name#tag) can change
+/// and is matched without regard to case.
 model Player {
   id   String @id @default(cuid())
+  /// Last known Riot ID, as HenrikDev capitalizes it. For display.
   name String
   tag  String
 
   puuid        String?   @unique
+  /// "name#tag" lowercased (NFC), set by the app. Looks a player up by Riot ID in any
+  /// capitalization. Null once another PUUID takes this Riot ID (this player renamed away).
+  riotIdKey    String?   @unique
   lastSyncedAt DateTime?
 
   matches PlayerMatch[]
   stats   PlayerStats?
-
-  @@unique([name, tag])
 }
 
 model PlayerMatch {

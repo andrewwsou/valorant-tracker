@@ -9,7 +9,8 @@
  * Environment:
  *   BASE_URL        the deployed app (https; http only for localhost)
  *   CRON_SECRET     the app's sync secret, sent as a bearer token
- *   SYNC_PLAYERS    JSON array, e.g. [{"name":"Player","tag":"NA1"}]
+ *   SYNC_PLAYERS    JSON array of players, by PUUID (survives renames) or Riot ID:
+ *                   [{"puuid":"54942ced-..."}, {"name":"Player","tag":"NA1"}]
  *   SYNC_REGION     default na
  *   SYNC_SIZE       matches per player, 1 to 10 (default 10)
  *   SYNC_GAP_MS     pause between players that called HenrikDev (default 10000)
@@ -19,7 +20,13 @@ import { appendFileSync } from "node:fs";
 
 export {};
 
-type Target = { name: string; tag: string };
+type Target = { puuid: string } | { name: string; tag: string };
+
+/** Same rule as the app (src/lib/riot-id.ts): safe in a URL path. */
+const PUUID_PATTERN = /^[0-9A-Za-z_-]{1,128}$/;
+
+/** How a player is shown until the app answers with their Riot ID. */
+const labelOf = (t: Target) => ("puuid" in t ? `puuid:${t.puuid.slice(0, 8)}` : `${t.name}#${t.tag}`);
 type Row = { label: string; outcome: string; http: string; detail: string; ok: boolean };
 
 const FINE = new Set(["synced", "skipped", "no-matches"]);
@@ -32,6 +39,12 @@ const REQUEST_TIMEOUT_MS = 45_000;
 class ConfigError extends Error {}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One line of text that came from a server, safe to print: no line breaks, so it
+ * can't start a GitHub workflow command (a line beginning with "::"), and short.
+ */
+const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ").replace(/^::/, ": :").slice(0, 200);
 
 function intEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -65,9 +78,14 @@ function readConfig() {
   }
   if (!Array.isArray(parsed) || parsed.length === 0) throw new ConfigError("SYNC_PLAYERS must be a non-empty JSON array");
   const players = parsed.map((entry, i): Target => {
+    if (typeof entry?.puuid === "string") {
+      const puuid = entry.puuid.trim();
+      if (!PUUID_PATTERN.test(puuid)) throw new ConfigError(`SYNC_PLAYERS[${i}] has an invalid puuid`);
+      return { puuid };
+    }
     const name = typeof entry?.name === "string" ? entry.name.trim() : "";
     const tag = typeof entry?.tag === "string" ? entry.tag.trim() : "";
-    if (!name || !tag) throw new ConfigError(`SYNC_PLAYERS[${i}] needs a name and a tag`);
+    if (!name || !tag) throw new ConfigError(`SYNC_PLAYERS[${i}] needs a puuid, or a name and a tag`);
     return { name, tag };
   });
 
@@ -86,9 +104,10 @@ type Config = ReturnType<typeof readConfig>;
 
 /** Syncs one player, waiting out a Retry-After when it fits. Throws ConfigError on an auth problem. */
 async function syncOne(config: Config, target: Target, deadline: number): Promise<Row> {
-  const label = `${target.name}#${target.tag}`;
+  const label = labelOf(target);
   const endpoint = new URL("/api/sync", config.url);
-  endpoint.search = new URLSearchParams({ region: config.region, name: target.name, tag: target.tag, size: String(config.size) }).toString();
+  const who: Record<string, string> = "puuid" in target ? { puuid: target.puuid } : { name: target.name, tag: target.tag };
+  endpoint.search = new URLSearchParams({ region: config.region, ...who, size: String(config.size) }).toString();
 
   for (let waits = 0; ; waits++) {
     let res: Response;
@@ -101,7 +120,10 @@ async function syncOne(config: Config, target: Target, deadline: number): Promis
       });
       text = await res.text();
     } catch (e) {
-      return { label, outcome: "error", http: "-", detail: e instanceof Error ? e.message : String(e), ok: false };
+      // The error's name and code only: a message could include the URL.
+      const code = (e as { cause?: { code?: unknown } })?.cause?.code;
+      const detail = e instanceof Error ? `${e.name}${typeof code === "string" ? ` ${code}` : ""}` : "request failed";
+      return { label, outcome: "error", http: "-", detail, ok: false };
     }
 
     let body: { outcome?: string; player?: string; error?: string } = {};
@@ -111,9 +133,10 @@ async function syncOne(config: Config, target: Target, deadline: number): Promis
       // Not JSON, such as HenrikDev's own error passed through. The status says enough.
     }
     const outcome = body.outcome ?? (res.ok ? "unknown" : "upstream-error");
-    const shown = body.player ?? label;
+    const shown = oneLine(body.player ?? label);
 
-    if (res.status === 401 || (res.status === 503 && outcome === "not-configured")) {
+    // Only the app's own answers about the secret stop the run; anything else is this player's problem.
+    if ((res.status === 401 && outcome === "unauthorized") || (res.status === 503 && outcome === "not-configured")) {
       throw new ConfigError(`the app refused the secret: HTTP ${res.status} ${outcome}`);
     }
     if (res.ok && FINE.has(outcome)) return { label: shown, outcome, http: String(res.status), detail: "", ok: true };
@@ -133,8 +156,8 @@ async function syncOne(config: Config, target: Target, deadline: number): Promis
       await sleep(waitMs);
       continue;
     }
-    const detail = body.error ?? text.slice(0, 200);
-    return { label: shown, outcome, http: String(res.status), detail, ok: false };
+    const detail = oneLine(body.error ?? text);
+    return { label: shown, outcome: oneLine(outcome), http: String(res.status), detail, ok: false };
   }
 }
 
@@ -170,17 +193,22 @@ async function main() {
   const deadline = Date.now() + config.budgetMs;
   const rows: Row[] = [];
   console.log(`Syncing ${config.players.length} player(s) against ${config.url.origin}`);
+  if (config.players.some((p) => !("puuid" in p))) {
+    console.log("Note: players listed by Riot ID stop syncing if they rename. List them by puuid instead.");
+  }
 
   try {
     for (const [i, target] of config.players.entries()) {
       if (Date.now() >= deadline) {
-        rows.push({ label: `${target.name}#${target.tag}`, outcome: "not-attempted", http: "-", detail: "time budget used up", ok: false });
+        const row = { label: labelOf(target), outcome: "not-attempted", http: "-", detail: "time budget used up", ok: false };
+        rows.push(row);
+        console.log(`::error title=Nightly sync::${row.label}: not attempted, the time budget was used up`);
         continue;
       }
       const row = await syncOne(config, target, deadline);
       rows.push(row);
       console.log(`${row.label}: ${row.outcome} (HTTP ${row.http})${row.detail ? ` ${row.detail}` : ""}`);
-      if (!row.ok) console.log(`::error title=Nightly sync::${row.label}: ${row.outcome} (HTTP ${row.http}) ${cell(row.detail)}`);
+      if (!row.ok) console.log(`::error title=Nightly sync::${row.label}: ${row.outcome} (HTTP ${row.http}) ${row.detail}`);
       // Leave room in the shared rate limit, except after a player that didn't call HenrikDev.
       if (i < config.players.length - 1 && row.outcome !== "skipped") await sleep(config.gapMs);
     }

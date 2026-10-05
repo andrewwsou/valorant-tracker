@@ -56,6 +56,9 @@ describe("getRecentMatches", () => {
   it("reads the newest matches, flattens them into rows, and caches them for 60 seconds", async () => {
     const result = await getRecentMatches("Enzo", "YYY", 10);
 
+    // Any capitalization finds the player, by their Riot ID key.
+    expect(db.player.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { riotIdKey: "enzo#yyy" } }));
+
     expect(db.playerMatch.findMany).toHaveBeenCalledWith({
       where: { playerId: "player-1" },
       include: { match: true },
@@ -73,14 +76,14 @@ describe("getRecentMatches", () => {
         kills: 18,
       }),
     ]);
-    expect(cacheSetJson).toHaveBeenCalledWith("dbmatches:v2:enzo:yyy:limit=10", { player, data: result.data }, 60);
+    expect(cacheSetJson).toHaveBeenCalledWith("dbmatches:v3:enzo#yyy:limit=10", { player, data: result.data }, 60);
   });
 
   it("remembers a missing player for only 15 seconds", async () => {
     db.player.findUnique.mockResolvedValue(null);
 
     await expect(getRecentMatches("ghost", "0000", 10)).resolves.toMatchObject({ player: null, data: [] });
-    expect(cacheSetJson).toHaveBeenCalledWith("dbmatches:v2:ghost:0000:limit=10", expect.anything(), 15);
+    expect(cacheSetJson).toHaveBeenCalledWith("dbmatches:v3:ghost#0000:limit=10", expect.anything(), 15);
   });
 
   it("still reads from the database when the cache is down", async () => {
@@ -93,8 +96,8 @@ describe("getRecentMatches", () => {
 
 describe("invalidateRecentMatches", () => {
   it("clears every cached list size for the player", async () => {
-    await invalidateRecentMatches("Enzo", "YYY");
+    await invalidateRecentMatches("enzo#yyy");
 
-    expect(cacheDelete).toHaveBeenCalledWith("dbmatches:v2:enzo:yyy:limit=10", "dbmatches:v2:enzo:yyy:limit=25");
+    expect(cacheDelete).toHaveBeenCalledWith("dbmatches:v3:enzo#yyy:limit=10", "dbmatches:v3:enzo#yyy:limit=25");
   });
 });
