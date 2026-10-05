@@ -17,7 +17,8 @@ const NO_STORE = { "cache-control": "no-store" };
  */
 export function requireCronSecret(req: Request): NextResponse | null {
   // Read on every request, so a secret added to the deployment takes effect on restart.
-  const secret = process.env.CRON_SECRET ?? "";
+  // Trimmed: a secret pasted with a trailing newline would otherwise never match.
+  const secret = (process.env.CRON_SECRET ?? "").trim();
   if (secret.length < MIN_SECRET_LENGTH) {
     console.error(`[auth] CRON_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters, so sync endpoints are closed`);
     return NextResponse.json(

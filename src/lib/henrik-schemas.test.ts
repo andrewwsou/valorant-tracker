@@ -184,7 +184,10 @@ describe("profile schemas", () => {
   const icon = "https://media.valorant-api.com/competitivetiers/03621f52-342b-cf4e-4f86-9350a49c6d04/27/smallicon.png";
 
   it("reads the account, rank, and rank history fields the page shows", () => {
-    expect(parseObjectBody("account", body({ card: { small: card } }), AccountV1).data).toEqual({ card: { small: card } });
+    const account = { puuid: "puuid-1", name: "Enzo", tag: "YYY", card: { small: card } };
+    const parsedAccount = parseObjectBody("account", body(account), AccountV1);
+    expect(parsedAccount.data).toEqual(account);
+    expect(parsedAccount.report.fallbacks).toEqual({});
     expect(
       parseObjectBody("mmr", body({ current_data: { currenttierpatched: "Radiant", images: { small: icon } }, highest_rank: { patched_tier: "Radiant" } }), MmrV2).data,
     ).toEqual({ current_data: { currenttierpatched: "Radiant", images: { small: icon } }, highest_rank: { patched_tier: "Radiant" } });
@@ -195,7 +198,7 @@ describe("profile schemas", () => {
 
   it("only accepts https images from the host the page is allowed to load", () => {
     for (const url of ["http://media.valorant-api.com/x.png", "https://evil.example/x.png", "javascript:alert(1)", "card.png"]) {
-      const { data, report } = parseObjectBody("account", body({ card: { small: url } }), AccountV1);
+      const { data, report } = parseObjectBody("account", body({ puuid: "p", name: "n", tag: "t", card: { small: url } }), AccountV1);
       expect(data?.card?.small, url).toBeNull();
       expect(report.fallbacks).toEqual({ "account.card.small|invalid": 1 });
     }

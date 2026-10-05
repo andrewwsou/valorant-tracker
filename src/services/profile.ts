@@ -62,6 +62,8 @@ async function loadProfile(id: RiotId): Promise<PlayerProfile> {
     errors.push(`Couldn't sync recent matches (HTTP ${sync.value.httpStatus})`);
   } else if (sync.value.status === "invalid-payload") {
     errors.push("Couldn't read recent matches");
+  } else if (sync.value.status === "in-progress") {
+    errors.push("Recent matches are still syncing. Refresh in a moment.");
   }
 
   const card = readData(account, "player card", errors, (body) => {

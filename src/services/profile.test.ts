@@ -32,7 +32,7 @@ const row: MatchRow = {
   agentIcon: null,
 };
 
-const skipped: SyncResult = { status: "skipped", lastSyncedAt: new Date() };
+const skipped: SyncResult = { status: "skipped", lastSyncedAt: new Date(), player: "enzo#yyy" };
 
 // Real HenrikDev image URLs: only https on media.valorant-api.com reach the page.
 const MEDIA = "https://media.valorant-api.com";
@@ -116,6 +116,15 @@ describe("getPlayerProfile", () => {
     const profile = await getPlayerProfile(id);
 
     expect([...profile.rankIconByMatch]).toEqual([["m1", DIAMOND]]);
+  });
+
+  it("says the matches are still syncing when another sync of this player didn't finish in time", async () => {
+    vi.mocked(syncPlayer).mockResolvedValue({ status: "in-progress" });
+
+    const profile = await getPlayerProfile(id);
+
+    expect(profile.errors).toEqual(["Recent matches are still syncing. Refresh in a moment."]);
+    expect(profile.matches).toEqual([row]);
   });
 
   it("reports a match list it couldn't read, and still shows stored matches", async () => {

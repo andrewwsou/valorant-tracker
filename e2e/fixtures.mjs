@@ -116,6 +116,11 @@ export const PLAYERS = [
   }),
 ];
 
+/** Finds a known player by PUUID. */
+export function findPlayerByPuuid(puuid) {
+  return PLAYERS.find((p) => p.puuid === puuid);
+}
+
 /** Finds a known player by Riot ID, ignoring case like the real API. */
 export function findPlayer(name, tag) {
   return PLAYERS.find((p) => p.name.toLowerCase() === name.toLowerCase() && p.tag.toLowerCase() === tag.toLowerCase());

@@ -100,17 +100,26 @@ export default async function LeaderboardPage({ searchParams }: { searchParams: 
             </tr>
           </thead>
           <tbody>
-            {entries.map((e) => (
-              <tr key={`${e.name}#${e.tag}`} className="border-t border-slate-700">
+            {entries.map((e, i) => (
+              // Two rows can share a name once a player renames and someone else takes it.
+              <tr key={`${i}:${e.name}#${e.tag}`} className="border-t border-slate-700">
                 <td className="px-3 py-2 tabular-nums">{e.rank}</td>
                 <td className="px-3 py-2">
-                  <Link
-                    href={`/player/${encodeURIComponent(e.name)}/${encodeURIComponent(e.tag)}`}
-                    className="text-slate-100 hover:underline"
-                  >
-                    {e.name}
-                    <span className="text-slate-400">#{e.tag}</span>
-                  </Link>
+                  {e.linked ? (
+                    <Link
+                      href={`/player/${encodeURIComponent(e.name)}/${encodeURIComponent(e.tag)}`}
+                      className="text-slate-100 hover:underline"
+                    >
+                      {e.name}
+                      <span className="text-slate-400">#{e.tag}</span>
+                    </Link>
+                  ) : (
+                    // Renamed away: their old Riot ID now opens someone else's profile.
+                    <span className="text-slate-300" title="This player has since changed their Riot ID">
+                      {e.name}
+                      <span className="text-slate-500">#{e.tag}</span>
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 tabular-nums">{e.trackerScore}</td>
                 <td className="px-3 py-2 tabular-nums">{Math.round(e.acs)}</td>

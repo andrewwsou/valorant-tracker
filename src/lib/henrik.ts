@@ -487,30 +487,34 @@ export function getMmrHistory(region: Region, name: string, tag: string) {
 /** The only platform the app tracks. v4 endpoints split PC and console players. */
 const PLATFORM = "pc";
 
+/** Whose matches to fetch: by Riot ID (what a profile view has), or by PUUID (survives renames). */
+export type MatchesTarget = { region: Region } & ({ name: string; tag: string } | { puuid: string });
+
+function matchesPath(target: MatchesTarget, qs: URLSearchParams) {
+  return "puuid" in target
+    ? `/v4/by-puuid/matches/${target.region}/${PLATFORM}/${enc(target.puuid)}?${qs}`
+    : `/v4/matches/${target.region}/${PLATFORM}/${enc(target.name)}/${enc(target.tag)}?${qs}`;
+}
+
+/**
+ * "v4" is in the key, so an empty list cached from v3 can't hide v4's answer. A PUUID
+ * is kept as it is (cacheKey lowercases), since PUUIDs may be case-sensitive.
+ */
+function matchesKey(target: MatchesTarget, mode: string) {
+  return "puuid" in target
+    ? `${cacheKey("matches", "v4", PLATFORM, "puuid", target.region)}:${target.puuid}:${mode.toLowerCase()}`
+    : cacheKey("matches", "v4", PLATFORM, target.region, target.name, target.tag, mode);
+}
+
 /**
  * Full match details for recent games, from v4 (about half the size of v3, and
  * the same match IDs and values; see LEARNING_LOG.md). Successful responses
  * aren't cached: the payload is megabytes, and the sync job stores what we need
  * in Postgres anyway. Failures and empty histories are, like every other lookup.
  */
-export function getMatches(
-  region: Region,
-  name: string,
-  tag: string,
-  opts: { size: number; mode: string },
-) {
+export function getMatches(target: MatchesTarget, opts: { size: number; mode: string }) {
   const qs = new URLSearchParams({ size: String(opts.size), mode: opts.mode });
-  return cachedRequest(
-    "matches",
-    `/v4/matches/${region}/${PLATFORM}/${enc(name)}/${enc(tag)}?${qs}`,
-    matchesKey(region, name, tag, opts.mode),
-    null,
-  );
-}
-
-/** "v4" is in the key, so an empty list cached from v3 can't hide v4's answer. */
-function matchesKey(region: Region, name: string, tag: string, mode: string) {
-  return cacheKey("matches", "v4", PLATFORM, region, name, tag, mode);
+  return cachedRequest("matches", matchesPath(target, qs), matchesKey(target, opts.mode), null);
 }
 
 /**
@@ -519,10 +523,10 @@ function matchesKey(region: Region, name: string, tag: string, mode: string) {
  * cached, so the caller, which is the one that validated it, says when it was bad.
  * Stored as a small 502, like any other failure.
  */
-export async function rememberUnreadableMatches(region: Region, name: string, tag: string, mode: string) {
+export async function rememberUnreadableMatches(target: MatchesTarget, mode: string) {
   const answer = localError(502, "unreadable", "HenrikDev sent match data this app couldn't read");
   try {
-    await cacheSetJson(matchesKey(region, name, tag, mode), answer, NEGATIVE_TTL_SECONDS.failure);
+    await cacheSetJson(matchesKey(target, mode), answer, NEGATIVE_TTL_SECONDS.failure);
   } catch (e) {
     console.warn(`[cache] couldn't remember unreadable matches: ${errorSummary(e)}`);
   }

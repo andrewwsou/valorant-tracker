@@ -55,6 +55,11 @@ export type LeaderboardEntry = {
   rank: number;
   name: string;
   tag: string;
+  /**
+   * False once another player has taken this Riot ID: this one renamed away, so a
+   * link by name would open someone else's profile.
+   */
+  linked: boolean;
   matches: number;
   wins: number;
   losses: number;
@@ -85,7 +90,7 @@ export function getLeaderboard(
       where: { matches: { gte: query.minMatches } },
       orderBy: [{ [query.sort]: "desc" }, { playerId: "asc" }],
       take: query.limit,
-      include: { player: { select: { name: true, tag: true } } },
+      include: { player: { select: { name: true, tag: true, riotIdKey: true } } },
     });
     span.setAttribute("leaderboard.rows", rows.length);
 
@@ -97,6 +102,7 @@ export function getLeaderboard(
         rank: tied ? previous.rank : i + 1,
         name: row.player.name,
         tag: row.player.tag,
+        linked: row.player.riotIdKey !== null,
         matches: row.matches,
         wins: row.wins,
         losses: row.losses,

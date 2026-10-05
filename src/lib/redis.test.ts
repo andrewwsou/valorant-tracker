@@ -1,6 +1,6 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRedis, REDIS_TIMEOUT_MS } from "@/lib/redis";
+import { claimLock, createRedis, REDIS_TIMEOUT_MS } from "@/lib/redis";
 
 // Real sockets and real timers: these check how fast the cache client gives up,
 // which is what keeps a page fast when Redis is unreachable or stuck.
@@ -77,5 +77,35 @@ describe("createRedis", () => {
 
     await expect(redis.get("key")).rejects.toMatchObject({ name: "TimeoutError" });
     await expect(redis.get("key")).resolves.toBe("value");
+  });
+});
+
+describe("claimLock", () => {
+  /** A fake Upstash REST server that answers SET NX with "already taken" and GET with `holder`. */
+  async function takenLock(holder: string) {
+    const commands: (string | number)[][] = [];
+    const { url } = await server((socket) =>
+      socket.on("data", (raw) => {
+        const body = raw.toString().split("\r\n\r\n")[1] ?? "[]";
+        const batch = JSON.parse(body) as (string | number)[][];
+        commands.push(...batch);
+        const results = batch.map(([cmd]) =>
+          String(cmd).toUpperCase() === "GET" ? { result: Buffer.from(holder).toString("base64") } : { result: null },
+        );
+        const reply = JSON.stringify(results);
+        socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${reply.length}\r\n\r\n${reply}`);
+      }),
+    );
+    return { client: createRedis(url, "token"), commands };
+  }
+
+  it("counts a lock that already holds this caller's token as won", async () => {
+    // What happens when a SET lands, its reply is lost, and the client's retry finds the key taken.
+    const mine = await takenLock("my-token");
+    await expect(claimLock("sync:v1:claim:riot:x", "my-token", 30_000, mine.client)).resolves.toBe(true);
+    expect(mine.commands[0]).toEqual(["set", "sync:v1:claim:riot:x", "my-token", "nx", "px", 30000]);
+
+    const theirs = await takenLock("someone-else");
+    await expect(claimLock("sync:v1:claim:riot:x", "my-token", 30_000, theirs.client)).resolves.toBe(false);
   });
 });

@@ -144,8 +144,11 @@ export type HenrikPlayer = z.output<typeof MatchPlayer>;
 /* Profile endpoints                                                        */
 /* ------------------------------------------------------------------------ */
 
-/** `data` from GET /v1/account. */
+/** `data` from GET /v1/account. The PUUID, name, and tag identify a renamed player during a sync. */
 export const AccountV1 = z.object({
+  puuid: lenient(Id, "account.puuid"),
+  name: text("account.name"),
+  tag: text("account.tag"),
   card: lenient(z.object({ small: imageUrl("account.card.small") }), "account.card"),
 });
 
