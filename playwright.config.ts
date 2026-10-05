@@ -8,7 +8,8 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+  // In CI, the github reporter annotates the run with each failure, so it shows without opening the log.
+  reporter: process.env.CI ? [["list"], ["github"], ["html", { open: "never" }]] : [["list"]],
   globalSetup: "./e2e/global-setup.ts",
   use: {
     baseURL: APP_URL,
